@@ -92,6 +92,57 @@ md"Subscribe? $(check_box)"
 # ╔═╡ 61952b04-cc7e-46f2-b273-854e425866ca
 subscription = make_subscription_reference()
 
+# ╔═╡ 1eedb961-877d-4481-9441-b7b04c0cd361
+md"""
+## Filtering model
+"""
+
+# ╔═╡ b8caf0eb-aad9-4506-823c-b7ecc23caf7c
+@model function one_time_step_graph(A, P, Q)
+	
+	x_prev_mean = datavar(Vector{Float64})
+	x_prev_cov  = datavar(Matrix{Float64})
+	
+	x_prev ~ MvNormalMeanCovariance(x_prev_mean, x_prev_cov)
+	x ~ MvNormalMeanCovariance(A * x_prev, P)
+	
+	y = datavar(Vector{Float64})
+	y ~ MvNormalMeanCovariance(x, Q)
+	
+	return x_prev_mean, x_prev_cov, x, y
+end
+
+# ╔═╡ c4cc673c-4d44-44df-89b0-68744d473a15
+function inference_filtering(data_stream, A, P, Q)
+	
+	model, (x_prev_mean, x_prev_cov, x, y) = one_time_step_graph(A, P, Q)
+	
+	data_subscription  = Ref{Teardown}(voidTeardown)
+	prior_subscription = Ref{Teardown}(voidTeardown)
+	
+	start_cb = () -> begin
+		ReactiveMP.update!(x_prev_mean, [ 0.0, 0.0 ])
+		ReactiveMP.update!(x_prev_cov, [ 100.0 0.0; 0.0 100.0 ])
+		
+		prior_subscription[] = subscribe!(getmarginal(x), (mx) -> begin
+			μ, Σ = mean_cov(mx)
+			ReactiveMP.update!(x_prev_mean, μ)
+			ReactiveMP.update!(x_prev_cov, Σ)	
+		end)
+		
+		data_subscription[] = subscribe!(data_stream, (d) -> begin 
+			ReactiveMP.update!(y, convert(Vector{Float64}, d))
+		end)
+	end
+	
+	stop_cb = () -> begin
+		unsubscribe!(data_subscription[])
+		unsubscribe!(prior_subscription[])
+	end
+	
+	return getmarginal(x), start_cb, stop_cb
+end
+
 # ╔═╡ a814a9fe-6c76-4e75-9b0d-7141e18d1f9d
 md"""
 ## Smoothing model
@@ -103,19 +154,23 @@ md"""
 	x = randomvar(npoints)
 	y = datavar(Vector{Float64}, npoints)
 	
+	cA = constvar(A)
+	cP = constvar(P)
+	cQ = constvar(Q)
+	
 	x[1] ~ MvNormalMeanCovariance([ 0.0, 0.0 ], [ 100.0 0.0; 0.0 100.0 ])
-	y[1] ~ MvNormalMeanCovariance(x[1], Q)
+	y[1] ~ MvNormalMeanCovariance(x[1], cQ)
 	
 	for i in 2:npoints
-		x[i] ~ MvNormalMeanCovariance(A * x[i - 1], P)
-		y[i] ~ MvNormalMeanCovariance(x[i], Q)
+		x[i] ~ MvNormalMeanCovariance(cA * x[i - 1], cP)
+		y[i] ~ MvNormalMeanCovariance(x[i], cQ)
 	end
 	
 	return x, y
 end
 
 # ╔═╡ 65894eb0-99a6-4d29-a23d-bbe1dab4a2e8
-function inference_full_graph(data, A, P, Q)
+function inference_smoothing(data, A, P, Q)
 
 	data    = convert(AbstractVector{Vector{Float64}}, data)
 	npoints = length(data)
@@ -223,6 +278,56 @@ end
 # ╔═╡ 82b4d2d0-c6a9-4e94-9705-4e24bd83e62e
 generate_static(r, 10)
 
+# ╔═╡ 20442224-6b3e-4def-8921-05178156fa4f
+begin
+	local npoints = 100
+	local P = [ 5.0 0.0; 0.0 5.0 ]
+	local Q = [ 100.0 0.0; 0.0 100.0 ]
+	local process = DataGenerationProcess(π / 30, npoints, P, Q)
+	local A = process.state_transition_matrix
+	local x, y  = generate_static(process, npoints)
+	local data_stream = from(y)
+	
+	local xmarginal_stream, start_cb, stop_cb = inference_filtering(
+		data_stream, A, P, Q
+	)
+	
+	local xkeep = keep(Marginal)
+	local subscription = subscribe!(xmarginal_stream, xkeep)
+	
+	start_cb()
+	stop_cb()
+	
+	unsubscribe!(subscription)
+	
+	local marginals = getvalues(xkeep)
+	
+	local range = 1:npoints
+	local dim   = (d) -> (a) -> map(e -> e[d...], a[range])
+	
+	local p1 = Plots.plot()
+	local p2 = Plots.plot()
+	
+	p1 = Plots.scatter!(p1, y |> dim(1), ms = 2, label = "Observations")
+	p1 = Plots.plot!(p1, x |> dim(1), label = "States")
+	p1 = Plots.plot!(p1, 
+		mean.(marginals) |> dim(1), ribbon = std.(marginals) |> dim((1, 1)),
+		label = "Estimates"
+	)
+	
+	p2 = Plots.scatter!(p2, y |> dim(2), ms = 2, label = "Observations")
+	p2 = Plots.plot!(p2, x |> dim(2), label = "States")
+	p2 = Plots.plot!(p2, 
+		mean.(marginals) |> dim(2), ribbon = std.(marginals) |> dim((2, 2)),
+		label = "Estimates"
+	)
+	
+	Plots.plot(p1, p2, layout = Plots.@layout([ a; b ]), size = (800, 600))
+end
+
+# ╔═╡ e8deb519-97dd-4a7d-8fdb-78689e9483f5
+generate_static(r, npoints)
+
 # ╔═╡ a3fdf5ea-a1db-45f8-8e61-bdbdba083fd3
 begin 
 	local npoints = 400
@@ -232,7 +337,7 @@ begin
 	local A = process.state_transition_matrix
 	local x, y  = generate_static(process, npoints)
 	
-	marginals = inference_full_graph(y, A, P, Q)
+	marginals = inference_smoothing(y, A, P, Q)
 	
 	local range = 100:1:200
 	local dim   = (d) -> (a) -> map(e -> e[d...], a[range])
@@ -317,6 +422,11 @@ end
 # ╠═b7ae53d3-526f-44fa-91df-88d0a7b59d9b
 # ╠═9216c513-b85e-487f-ae82-ed16e5463516
 # ╠═82b4d2d0-c6a9-4e94-9705-4e24bd83e62e
+# ╟─1eedb961-877d-4481-9441-b7b04c0cd361
+# ╠═b8caf0eb-aad9-4506-823c-b7ecc23caf7c
+# ╠═c4cc673c-4d44-44df-89b0-68744d473a15
+# ╠═20442224-6b3e-4def-8921-05178156fa4f
+# ╠═e8deb519-97dd-4a7d-8fdb-78689e9483f5
 # ╟─a814a9fe-6c76-4e75-9b0d-7141e18d1f9d
 # ╠═a327b4f6-b8b9-4536-b45d-c13b767a3606
 # ╠═65894eb0-99a6-4d29-a23d-bbe1dab4a2e8
