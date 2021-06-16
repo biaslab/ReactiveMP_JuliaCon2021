@@ -22,6 +22,7 @@ begin
 	using MacroTools, PlutoUI, Distributions
 	using ColorSchemes
 	using Rocket, GraphPPL, ReactiveMP
+	using Random
 	
 	import Plots
 end
@@ -256,9 +257,12 @@ function generate_next!(pendulum::DataGenerationProcess)
 end
 
 # ╔═╡ 5a4a85d1-bfa9-4451-84e7-835d2e9c610e
-function generate_static(pendulum::DataGenerationProcess, npoints::Int)
+function generate_static(pendulum::DataGenerationProcess, npoints::Int; rng = nothing)
+	
+	rng = rng === nothing ? Random.GLOBAL_RNG : MersenneTwister(rng)
+	
 	initial_state       = Point2f0(5.0, 0.0)
-	initial_observation = rand(MvNormal(initial_state, pendulum.observation_noise))
+	initial_observation = rand(rng, MvNormal(initial_state, pendulum.observation_noise))
 	
 	x_k = Vector{Point2f0}(undef, npoints)
 	y_k = Vector{Point2f0}(undef, npoints)
@@ -268,8 +272,8 @@ function generate_static(pendulum::DataGenerationProcess, npoints::Int)
 	
 	for i in 2:npoints
 		tmp = pendulum.state_transition_matrix * x_k[i - 1]
-		x_k[i] = rand(MvNormal(tmp, pendulum.state_transition_noise))
-		y_k[i] = rand(MvNormal(x_k[i], pendulum.observation_noise))
+		x_k[i] = rand(rng, MvNormal(tmp, pendulum.state_transition_noise))
+		y_k[i] = rand(rng, MvNormal(x_k[i], pendulum.observation_noise))
 	end
 	
 	return x_k, y_k
@@ -280,12 +284,13 @@ generate_static(r, 10)
 
 # ╔═╡ 20442224-6b3e-4def-8921-05178156fa4f
 begin
-	local npoints = 100
+	local rng = 123
+	local npoints = 300
 	local P = [ 5.0 0.0; 0.0 5.0 ]
 	local Q = [ 100.0 0.0; 0.0 100.0 ]
 	local process = DataGenerationProcess(π / 30, npoints, P, Q)
 	local A = process.state_transition_matrix
-	local x, y  = generate_static(process, npoints)
+	local x, y  = generate_static(process, npoints; rng = rng)
 	local data_stream = from(y)
 	
 	local xmarginal_stream, start_cb, stop_cb = inference_filtering(
@@ -330,16 +335,17 @@ generate_static(r, npoints)
 
 # ╔═╡ a3fdf5ea-a1db-45f8-8e61-bdbdba083fd3
 begin 
-	local npoints = 400
+	local rng = 123
+	local npoints = 300
 	local P = [ 5.0 0.0; 0.0 5.0 ]
 	local Q = [ 100.0 0.0; 0.0 100.0 ]
 	local process = DataGenerationProcess(π / 30, npoints, P, Q)
 	local A = process.state_transition_matrix
-	local x, y  = generate_static(process, npoints)
+	local x, y  = generate_static(process, npoints; rng = rng)
 	
 	marginals = inference_smoothing(y, A, P, Q)
 	
-	local range = 100:1:200
+	local range = 1:npoints
 	local dim   = (d) -> (a) -> map(e -> e[d...], a[range])
 	
 	local p1 = Plots.plot()
