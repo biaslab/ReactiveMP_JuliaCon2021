@@ -81,17 +81,74 @@ end
 # ╔═╡ aa3f4b38-ff13-492b-9eb3-bda2c80f5c5d
 @bind speed PlutoUI.Slider(10:100, default = 50, show_value = true)
 
-# ╔═╡ 320d3d53-bf88-4be0-a189-a3f1e8c4b24a
-stream = timer(100, Int(10 * round(100 / speed)))
-
 # ╔═╡ 5be725e6-732d-42e3-8967-3e8251946d72
-check_box = @bind is_subscribed CheckBox(default = false)
+check_box = @bind is_subscribed CheckBox(default = false);
 
 # ╔═╡ c189ddad-c8f6-45c4-9cec-8d72a09f98cf
 md"Subscribe? $(check_box)"
 
 # ╔═╡ 61952b04-cc7e-46f2-b273-854e425866ca
-subscription = make_subscription_reference()
+subscription = make_subscription_reference();
+
+# ╔═╡ d5c1b0e8-fd51-4312-a06f-0287aad184ba
+begin
+	angle = π / 30
+	A = [ cos(angle) -sin(angle); sin(angle) cos(angle) ]
+	P = [ 0.1 0.0; 0.0 0.1 ]
+	Q = [ 10.0 0.0; 0.0 10.0 ]
+end;
+
+# ╔═╡ d5a38b62-eceb-4223-be3a-d7e2908c53ee
+stop_cb_reference = Ref{Any}(nothing)
+
+# ╔═╡ 3a3ed6e1-9fe7-4a65-bde5-5b44e49f928b
+inference_subscription_reference = Ref{Any}(nothing)
+
+# ╔═╡ 554bbbcc-6433-4731-8a7e-6aad6ace22e4
+stop_cb_reference[]()
+
+# ╔═╡ 54043ff7-05f2-48ef-89f4-050379eba3f9
+begin
+	
+	local f = Figure()
+	
+	local ax11 = f[1, 1] = Axis(f)
+	# local ax1211 = f[1, 1][1, 1] = Axis(f)
+	# local ax1221 = f[1, 1][2, 1] = Axis(f)
+	
+	local colors = collect(cgrad(:Blues_9, npoints))
+	local sizes  = range(2, 6, length=npoints)
+	
+	inferred_states = Node(map(_ -> Point2f0(rand(), rand()), 1:npoints))
+	inferred_band_1 = Node(map(_ -> Point2f0(10, -10), 1:npoints))
+	inferred_band_2 = Node(map(_ -> Point2f0(10, -10), 1:npoints))
+	
+	lines!(f[1, 1], inferred_states, linewidth = sizes, color = colors)
+	limits!(-50, 50, -50, 50)
+	
+	inferred_states_dim1 = map(i -> map(r -> r[1], i), inferred_states)
+	inferred_states_dim2 = map(i -> map(r -> r[2], i), inferred_states)
+	
+	inferred_band_dim1_up = 
+		map(i -> map(r -> Point2f0(r[1], r[2][1]), enumerate(i)), inferred_band_1)
+	inferred_band_dim1_lp = 
+		map(i -> map(r -> Point2f0(r[1], r[2][2]), enumerate(i)), inferred_band_1)
+	
+	inferred_band_dim2_up = 
+		map(i -> map(r -> Point2f0(r[1], r[2][1]), enumerate(i)), inferred_band_2)
+	inferred_band_dim2_lp = 
+		map(i -> map(r -> Point2f0(r[1], r[2][2]), enumerate(i)), inferred_band_2)
+
+	lines(f[1, 2][1, 1], inferred_states_dim1, color = colors)
+	band!(f[1, 2][1, 1], inferred_band_dim1_up, inferred_band_dim1_lp)
+	limits!(0, npoints, -50, 50)
+	
+	lines(f[1, 2][2, 1], inferred_states_dim2, color = colors)
+	band!(f[1, 2][2, 1], inferred_band_dim2_up, inferred_band_dim2_lp)
+	limits!(0, npoints, -50, 50)
+	
+	inferred_fig = current_figure()
+end
 
 # ╔═╡ 1eedb961-877d-4481-9441-b7b04c0cd361
 md"""
@@ -231,16 +288,8 @@ struct DataGenerationProcess
 	end
 end
 
-# ╔═╡ 8de8cebd-b57e-438c-9cae-caf245c6a74b
-data = DataGenerationProcess(π / 30, npoints, [ 10.0 0.0; 0.0 10.0 ])
-
-# ╔═╡ de00e97d-e8a8-46a1-a144-04925a078e5a
-data_stream = stream |> 
-	map_to(DataGenerationProcess(π / 30, npoints, [ 10.0 0.0; 0.0 10.0 ])) |>
-	map(Any, process -> generate_next(process))
-
-# ╔═╡ 9216c513-b85e-487f-ae82-ed16e5463516
-r = DataGenerationProcess(π / 30, npoints, [ 5.0 0.0; 0.0 5.0 ], [ 1.0 0.0; 0.0 1.0 ])
+# ╔═╡ 399a5b08-ce77-4864-a957-d0be1d6468c1
+process = DataGenerationProcess(angle, npoints, P, Q)
 
 # ╔═╡ fae6b763-658c-4e89-a0c3-477612e6312f
 function generate_next!(pendulum::DataGenerationProcess)
@@ -254,6 +303,59 @@ function generate_next!(pendulum::DataGenerationProcess)
 	push!(pendulum.observations, y_k)
 	
 	return pendulum.states, pendulum.observations
+end
+
+# ╔═╡ de00e97d-e8a8-46a1-a144-04925a078e5a
+stream = timer(100, Int(10 * round(100 / speed))) |> 
+	map_to(process) |> 
+	map(Tuple, generate_next!) |>
+	share_replay(1)
+
+# ╔═╡ dc93fbc9-5c2c-4c97-bf46-6dd24bc24fe4
+begin
+	if stop_cb_reference[] !== nothing
+		stop_cb_reference[]()
+	end
+	
+	if inference_subscription_reference[] !== nothing
+		unsubscribe!(inference_subscription_reference[])
+	end
+	
+	local data_stream = stream |> map(Any, d -> d[2][end])
+	
+	inferred_stream, start_cb, stop_cb = inference_filtering(data_stream, A, P, Q)
+	
+	local inferred_buffer = CircularBuffer{Marginal}(npoints)
+	
+	inference_subscription_reference[] = 
+		subscribe!(inferred_stream, (marginal) -> begin 
+			try 
+				push!(inferred_buffer, marginal)
+				
+				local ms = mean.(inferred_buffer)
+				local σ = var.(inferred_buffer)
+				
+				# @show σ
+				
+				inferred_states[] = ms
+				
+				inferred_band_1[] = 
+					map(r -> Point2f0(r[1][1] + r[2][1], r[1][1] - r[2][1]), 
+					zip(ms, σ)
+				)
+				
+				inferred_band_2[] = 
+					map(r -> Point2f0(r[1][2] + r[2][2], r[1][2] - r[2][2]), 
+					zip(ms, σ)
+				)
+			catch e
+				println(e)
+			end
+		end)
+	
+	start_cb()
+	
+	stop_cb_reference[] = stop_cb
 end
 
 # ╔═╡ 5a4a85d1-bfa9-4451-84e7-835d2e9c610e
@@ -278,9 +380,6 @@ function generate_static(pendulum::DataGenerationProcess, npoints::Int; rng = no
 	
 	return x_k, y_k
 end
-
-# ╔═╡ 82b4d2d0-c6a9-4e94-9705-4e24bd83e62e
-generate_static(r, 10)
 
 # ╔═╡ 20442224-6b3e-4def-8921-05178156fa4f
 begin
@@ -399,9 +498,9 @@ end
 
 # ╔═╡ b7ae53d3-526f-44fa-91df-88d0a7b59d9b
 @guard_subscription if is_subscribed
-	subscription[] = subscribe!(stream, (_) -> begin
+	subscription[] = subscribe!(stream, (data) -> begin
 		try
-			states, observations = generate_next!(data)
+			states, observations = data[1], data[2]
 
 			real_states[]  = states
 			noisy_states[] = observations
@@ -417,17 +516,20 @@ end
 # ╠═bdf461c7-918d-4f78-968d-aa3dfd11d3b0
 # ╟─08ec8032-40ba-4bef-9dce-53389a531cab
 # ╠═a91b698e-24fc-47d0-9742-b6a151eacdd3
-# ╠═12f072b6-1e9d-42d0-9784-15ab2ed32e1c
+# ╟─12f072b6-1e9d-42d0-9784-15ab2ed32e1c
 # ╟─c189ddad-c8f6-45c4-9cec-8d72a09f98cf
 # ╠═aa3f4b38-ff13-492b-9eb3-bda2c80f5c5d
-# ╠═320d3d53-bf88-4be0-a189-a3f1e8c4b24a
-# ╟─5be725e6-732d-42e3-8967-3e8251946d72
-# ╠═8de8cebd-b57e-438c-9cae-caf245c6a74b
+# ╠═5be725e6-732d-42e3-8967-3e8251946d72
 # ╠═61952b04-cc7e-46f2-b273-854e425866ca
+# ╠═d5c1b0e8-fd51-4312-a06f-0287aad184ba
+# ╠═399a5b08-ce77-4864-a957-d0be1d6468c1
 # ╠═de00e97d-e8a8-46a1-a144-04925a078e5a
 # ╠═b7ae53d3-526f-44fa-91df-88d0a7b59d9b
-# ╠═9216c513-b85e-487f-ae82-ed16e5463516
-# ╠═82b4d2d0-c6a9-4e94-9705-4e24bd83e62e
+# ╠═d5a38b62-eceb-4223-be3a-d7e2908c53ee
+# ╠═3a3ed6e1-9fe7-4a65-bde5-5b44e49f928b
+# ╠═dc93fbc9-5c2c-4c97-bf46-6dd24bc24fe4
+# ╠═554bbbcc-6433-4731-8a7e-6aad6ace22e4
+# ╠═54043ff7-05f2-48ef-89f4-050379eba3f9
 # ╟─1eedb961-877d-4481-9441-b7b04c0cd361
 # ╠═b8caf0eb-aad9-4506-823c-b7ecc23caf7c
 # ╠═c4cc673c-4d44-44df-89b0-68744d473a15
