@@ -1,0 +1,7 @@
+name = "JuliaCon2021_ReactiveMP"
+uuid = "4024d468-f9b9-4766-8c38-dc3fede74061"
+authors = ["Bagaev Dmitry <bvdmitri@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+Pluto = "c3e4b0f8-55cb-11ea-2926-15256bba5781"
