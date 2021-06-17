@@ -23,6 +23,7 @@ begin
 	using ColorSchemes
 	using Rocket, GraphPPL, ReactiveMP
 	using Random
+	using Colors
 	
 	import Plots
 end
@@ -39,112 +40,133 @@ begin
 	WGLMakie.set_theme!(resolution = (1300, 800))
 end
 
-# ╔═╡ 08ec8032-40ba-4bef-9dce-53389a531cab
-make_subscription_reference() = Ref{Rocket.Teardown}(voidTeardown)
+# ╔═╡ bc84b4d8-8916-4081-9d86-9322d8f4d200
+md"""
+### Setup 
+"""
 
-# ╔═╡ a91b698e-24fc-47d0-9742-b6a151eacdd3
-npoints = 30
+# ╔═╡ bb1e524b-7cff-412a-8c05-d60a350f28b8
+md"""
+Here we create reactive nodes for our interactive plots. It is worth to note that we use `Makie.jl` plotting engine, which uses `Observables.jl` for reactivity. `ReactiveMP.jl` on the other hand uses `Rocket.jl` reactive framework for best performance and rich functionality.
+"""
 
-# ╔═╡ 12f072b6-1e9d-42d0-9784-15ab2ed32e1c
-begin
-	
-	local f = Figure()
-	
-	local colors = collect(cgrad(:Blues_9, npoints))
-	local sizes  = range(2, 6, length=npoints)
-	
-	real_states  = Node(map(_ -> Point2f0(rand(), rand()), 1:npoints))
-	noisy_states = Node(map(_ -> Point2f0(0.0, 0.0), 1:npoints))
-	
-	scatter(f[1, 1], noisy_states, markersize = sizes, color = :green)
-	lines!(f[1, 1], real_states, linewidth = sizes, color = colors)
-	limits!(-50, 50, -50, 50)
-	
-	states_dim1 = map(i -> map(r -> r[1], i), real_states)
-	states_dim2 = map(i -> map(r -> r[2], i), real_states)
-	
-	noisy_dim1 = map(i -> map(r -> r[1], i), noisy_states)
-	noisy_dim2 = map(i -> map(r -> r[2], i), noisy_states)
+# ╔═╡ c135e271-10d3-4deb-abf2-6d5f65a6fc78
+md"""
+Here we create data generation check box and subscription reference.
+"""
 
-	scatter(f[1, 2][1, 1], noisy_dim1, markersize = sizes, color = :green)
-	lines!(f[1, 2][1, 1], states_dim1, color = colors)
-	limits!(0, npoints, -50, 50)
-	
-	scatter(f[1, 2][2, 1], noisy_dim2, markersize = sizes, color = :green)
-	lines!(f[1, 2][2, 1], states_dim2, color = colors)
-	limits!(0, npoints, -50, 50)
-	
-	
-	fig = current_figure()
-end
+# ╔═╡ 5752f563-22ef-4e9e-a3d0-6630cc911248
+md"""
+To make plots look nicer we pass zeroed data on unsubscription to observables used for plotting
+"""
 
-# ╔═╡ aa3f4b38-ff13-492b-9eb3-bda2c80f5c5d
-@bind speed PlutoUI.Slider(10:100, default = 50, show_value = true)
+# ╔═╡ 6860f6cd-7507-455c-85e1-a89afea8890e
+md"""
+### Data generation process
+"""
 
-# ╔═╡ 5be725e6-732d-42e3-8967-3e8251946d72
-check_box = @bind is_subscribed CheckBox(default = false);
+# ╔═╡ f5fe83ad-3be9-4d2c-85ad-da7633d7367e
+md"""
+As our synthetic stream of data we create a timer observable, which emits a number after a prescpecified duration. This stream is infinite and never completes. We re-map it to our data generation process and call `generate_next!` function on each timer emission. We also use `share_replay` operator to share this stream of data between multiple listeners.
+"""
 
-# ╔═╡ c189ddad-c8f6-45c4-9cec-8d72a09f98cf
-md"Subscribe? $(check_box)"
+# ╔═╡ 1b31dfed-7bbf-4c12-a70c-a3dbb7854d9d
+md"""
+### Inference setup
+"""
 
-# ╔═╡ 61952b04-cc7e-46f2-b273-854e425866ca
-subscription = make_subscription_reference();
+# ╔═╡ f670169a-72d9-4e55-b8ce-a6db4baec53b
+vecsqrt(v) = sqrt.(v)
 
 # ╔═╡ d5c1b0e8-fd51-4312-a06f-0287aad184ba
 begin
-	angle = π / 30
+	# Note: interactive visualisation is a bit fragile with changing parameters while             visualising at the same time, it is better to deselect both check boxes               before 	changing anything	
+
+	# How many points are used for plotting
+	# Inference does not use this parameter since we do Kalman filtering
+	npoints = 100
+	
+	# Rate at which data points are generated, should be somewhere 
+	# between 10 and 100
+	speed = 70
+	
+	# Angle used in rotation matrix, specifies angle change rate
+	angle = π / 100
+	
 	A = [ cos(angle) -sin(angle); sin(angle) cos(angle) ]
+	
+	# State transition noise
 	P = [ 0.1 0.0; 0.0 0.1 ]
-	Q = [ 10.0 0.0; 0.0 10.0 ]
+	
+	# Observations noise
+	Q = [ 200.0 0.0; 0.0 200.0 ]
 end;
 
-# ╔═╡ d5a38b62-eceb-4223-be3a-d7e2908c53ee
-stop_cb_reference = Ref{Any}(nothing)
+# ╔═╡ 65125537-9ee9-4b2d-92be-45ee1a914b24
+begin 	
+	real_states = Node(map(_ -> Point2f0(1000.0, 1000.0), 1:npoints))
+	noisy_states = Node(map(_ -> Point2f0(1000.0, 1000.0), 1:npoints))
+end;
 
-# ╔═╡ 3a3ed6e1-9fe7-4a65-bde5-5b44e49f928b
-inference_subscription_reference = Ref{Any}(nothing)
+# ╔═╡ fa7fbcbc-e229-4553-88a8-17c53779725d
+begin 
+	inferred_states  = Node(map(_ -> Point2f0(rand(), rand()), 1:npoints))
+	inferred_band_up = Node(map(_ -> Point2f0(10, -10), 1:npoints))
+	inferred_band_lp = Node(map(_ -> Point2f0(10, -10), 1:npoints))
+end;
 
-# ╔═╡ 554bbbcc-6433-4731-8a7e-6aad6ace22e4
-stop_cb_reference[]()
+# ╔═╡ 736867b0-d0b6-41b9-b4cc-b0de734714fa
+begin
+	inferred_buffer = CircularBuffer{Marginal}(npoints)
+	fill!(inferred_buffer, ReactiveMP.Marginal(PointMass([ 0.0, 0.0 ]), false, false))
+end;
 
 # ╔═╡ 54043ff7-05f2-48ef-89f4-050379eba3f9
 begin
-	
+	sleep(0.5)
 	local f = Figure()
 	
-	local ax11 = f[1, 1] = Axis(f)
-	# local ax1211 = f[1, 1][1, 1] = Axis(f)
-	# local ax1221 = f[1, 1][2, 1] = Axis(f)
+	local colors_data = collect(cgrad(:Blues_9, npoints))
+	local colors_inferred = collect(cgrad(:Reds_9, npoints))
+	local sizes  = range(4, 8, length=npoints)
 	
-	local colors = collect(cgrad(:Blues_9, npoints))
-	local sizes  = range(2, 6, length=npoints)
-	
-	inferred_states = Node(map(_ -> Point2f0(rand(), rand()), 1:npoints))
-	inferred_band_1 = Node(map(_ -> Point2f0(10, -10), 1:npoints))
-	inferred_band_2 = Node(map(_ -> Point2f0(10, -10), 1:npoints))
-	
-	lines!(f[1, 1], inferred_states, linewidth = sizes, color = colors)
+	scatter(f[1, 1], noisy_states, markersize = sizes, color = :green)
+	lines!(f[1, 1], real_states, linewidth = sizes, color = colors_data)
+	lines!(f[1, 1], inferred_states, linewidth = sizes, color = colors_inferred)
 	limits!(-50, 50, -50, 50)
 	
 	inferred_states_dim1 = map(i -> map(r -> r[1], i), inferred_states)
 	inferred_states_dim2 = map(i -> map(r -> r[2], i), inferred_states)
 	
-	inferred_band_dim1_up = 
-		map(i -> map(r -> Point2f0(r[1], r[2][1]), enumerate(i)), inferred_band_1)
-	inferred_band_dim1_lp = 
-		map(i -> map(r -> Point2f0(r[1], r[2][2]), enumerate(i)), inferred_band_1)
+	inferred_band_dim1_up = map(i -> map(r -> r[1], i), inferred_band_up)
+	inferred_band_dim1_lp = map(i -> map(r -> r[1], i), inferred_band_lp)
 	
-	inferred_band_dim2_up = 
-		map(i -> map(r -> Point2f0(r[1], r[2][1]), enumerate(i)), inferred_band_2)
-	inferred_band_dim2_lp = 
-		map(i -> map(r -> Point2f0(r[1], r[2][2]), enumerate(i)), inferred_band_2)
+	inferred_band_dim2_up = map(i -> map(r -> r[2], i), inferred_band_up)
+	inferred_band_dim2_lp = map(i -> map(r -> r[2], i), inferred_band_lp)
 
-	lines(f[1, 2][1, 1], inferred_states_dim1, color = colors)
-	band!(f[1, 2][1, 1], inferred_band_dim1_up, inferred_band_dim1_lp)
+	local states_dim1 = map(i -> map(r -> r[1], i), real_states)
+	local states_dim2 = map(i -> map(r -> r[2], i), real_states)
+	
+	local noisy_dim1 = map(i -> map(r -> r[1], i), noisy_states)
+	local noisy_dim2 = map(i -> map(r -> r[2], i), noisy_states)
+	
+	lines(f[1, 2][1, 1], inferred_states_dim1, color = colors_inferred)
+	band!(f[1, 2][1, 1], 
+		1:npoints, inferred_band_dim1_up, inferred_band_dim1_lp,
+		color = RGBA(0.9,0.0,0.0,0.2)
+	)
+	lines!(f[1, 2][1, 1], states_dim1, color = colors_data)
+	scatter!(f[1, 2][1, 1], noisy_dim1, markersize = sizes, color = :green)
 	limits!(0, npoints, -50, 50)
 	
-	lines(f[1, 2][2, 1], inferred_states_dim2, color = colors)
-	band!(f[1, 2][2, 1], inferred_band_dim2_up, inferred_band_dim2_lp)
+	lines(f[1, 2][2, 1], inferred_states_dim2, color = colors_inferred)
+	band!(f[1, 2][2, 1], 
+		1:npoints, inferred_band_dim2_up, inferred_band_dim2_lp,
+		color = RGBA(0.9,0.0,0.0,0.2)
+	)
+	lines!(f[1, 2][2, 1], states_dim2, color = colors_data)
+	scatter!(f[1, 2][2, 1], noisy_dim2, markersize = sizes, color = :green)
+
 	limits!(0, npoints, -50, 50)
 	
 	inferred_fig = current_figure()
@@ -170,36 +192,16 @@ md"""
 	return x_prev_mean, x_prev_cov, x, y
 end
 
-# ╔═╡ c4cc673c-4d44-44df-89b0-68744d473a15
-function inference_filtering(data_stream, A, P, Q)
+# ╔═╡ 36344f8d-1fbb-4b54-b17e-46edcebb6c7d
+begin 
+	filtering_seed    = 123
+	filtering_npoints = 300
 	
-	model, (x_prev_mean, x_prev_cov, x, y) = one_time_step_graph(A, P, Q)
+	filtering_angle = π / 30
 	
-	data_subscription  = Ref{Teardown}(voidTeardown)
-	prior_subscription = Ref{Teardown}(voidTeardown)
-	
-	start_cb = () -> begin
-		ReactiveMP.update!(x_prev_mean, [ 0.0, 0.0 ])
-		ReactiveMP.update!(x_prev_cov, [ 100.0 0.0; 0.0 100.0 ])
-		
-		prior_subscription[] = subscribe!(getmarginal(x), (mx) -> begin
-			μ, Σ = mean_cov(mx)
-			ReactiveMP.update!(x_prev_mean, μ)
-			ReactiveMP.update!(x_prev_cov, Σ)	
-		end)
-		
-		data_subscription[] = subscribe!(data_stream, (d) -> begin 
-			ReactiveMP.update!(y, convert(Vector{Float64}, d))
-		end)
-	end
-	
-	stop_cb = () -> begin
-		unsubscribe!(data_subscription[])
-		unsubscribe!(prior_subscription[])
-	end
-	
-	return getmarginal(x), start_cb, stop_cb
-end
+	filtering_state_transition_noise = [ 1.0 0.0; 0.0 1.0 ]
+	fittering_observations_noise     = [ 200.0 0.0; 0.0 200.0 ]
+end;
 
 # ╔═╡ a814a9fe-6c76-4e75-9b0d-7141e18d1f9d
 md"""
@@ -249,13 +251,101 @@ function inference_smoothing(data, A, P, Q)
 	return getvalues(xbuffer)
 end
 
-# ╔═╡ 21b44508-ec16-4f15-9ba1-97fce4667873
-
+# ╔═╡ 621bebd0-492e-49fc-a58a-ecaee47286f6
+begin 
+	smoothing_seed    = 42
+	smoothing_npoints = 300
+	
+	smoothing_angle = π / 30
+	
+	smoothing_state_transition_noise = [ 1.0 0.0; 0.0 1.0 ]
+	smoothing_observations_noise     = [ 200.0 0.0; 0.0 200.0 ]
+end;
 
 # ╔═╡ 39b43b20-915b-44a6-947e-170234eae68a
 md"""
 ## Utilities
 """
+
+# ╔═╡ e59d6d36-d576-4b2d-a66b-a03e780afc9c
+make_subscription_reference() = Ref{Rocket.Teardown}(voidTeardown)
+
+# ╔═╡ 5be725e6-732d-42e3-8967-3e8251946d72
+begin 
+	data_generation_check_box = 
+		@bind is_data_generation_subscribed CheckBox(default = false);
+	
+	data_generation_subscription = make_subscription_reference()
+end;
+
+# ╔═╡ 00844a01-0ccd-48d9-a961-ea1d8383da70
+if !is_data_generation_subscribed
+	@async begin
+		local zeroed = map(_ -> Point2f0(1000.0, 1000.0), 1:npoints)
+		sleep(0.1)
+		real_states[]  = zeroed
+		noisy_states[] = zeroed
+	end
+end;
+
+# ╔═╡ 61f29db3-6deb-47ca-8473-f9ead5d9d2f0
+data_generation_callback = (data) -> begin
+	try
+		states, observations = data[1], data[2]
+		
+		# Every time we receive a new data from our stream 
+		# we just pass it to observable nodes used for plotting
+
+		if is_data_generation_subscribed
+			real_states[]  = states
+			noisy_states[] = observations
+		end
+		
+	catch e
+		println(e)
+	end
+end
+
+# ╔═╡ ab1148c0-16bf-4f14-874a-b06878c8e538
+begin 
+	inference_check_box    = @bind is_inference_subscribed CheckBox(default = false);
+	inference_subscription = make_subscription_reference()
+end;
+
+# ╔═╡ 2e3b739c-de1a-46ed-93cd-cdb3dda8c7b2
+if !is_inference_subscribed
+	@async begin
+		local zeroed = map(_ -> Point2f0(1000.0, 1000.0), 1:npoints)
+		sleep(0.1)
+		inferred_states[] = zeroed
+		inferred_band_up[] = zeroed
+		inferred_band_lp[] = zeroed
+	end
+end;
+
+# ╔═╡ aa7b11f4-6a37-4c70-9fdf-174d9e1e2c3a
+inference_callback = (marginal) -> begin
+	try 
+		push!(inferred_buffer, marginal)
+		
+		local ms = mean.(inferred_buffer)
+		local σ  = vecsqrt.(var.(inferred_buffer))
+		local up = ms .+ σ
+		local lp = ms .- σ
+
+		if is_inference_subscribed
+			inferred_states[]  = ms
+			inferred_band_up[] = up
+			inferred_band_lp[] = lp
+		end
+
+	catch e
+		println(e)
+	end
+end
+
+# ╔═╡ 8b2113ff-6ade-40b5-87e9-3a62614e2a72
+md"Show data? $(data_generation_check_box) Run inference? $(inference_check_box)"
 
 # ╔═╡ e738bbf7-8a66-411c-82f9-9716f749f30b
 md"""
@@ -288,9 +378,6 @@ struct DataGenerationProcess
 	end
 end
 
-# ╔═╡ 399a5b08-ce77-4864-a957-d0be1d6468c1
-process = DataGenerationProcess(angle, npoints, P, Q)
-
 # ╔═╡ fae6b763-658c-4e89-a0c3-477612e6312f
 function generate_next!(pendulum::DataGenerationProcess)
 	x_k_min = last(pendulum.states)
@@ -305,65 +392,33 @@ function generate_next!(pendulum::DataGenerationProcess)
 	return pendulum.states, pendulum.observations
 end
 
+# ╔═╡ 5d74139d-f61c-4a63-a7bd-35c20f5c04af
+function make(::Type{ <: DataGenerationProcess }, angle::Float64, npoints, snoise, onoise)
+	object = DataGenerationProcess(angle, npoints, snoise, onoise)
+	for i in 1:npoints-1
+		generate_next!(object)
+	end
+	return object
+end
+
+# ╔═╡ 399a5b08-ce77-4864-a957-d0be1d6468c1
+process = make(DataGenerationProcess, angle, npoints, P, Q);
+
 # ╔═╡ de00e97d-e8a8-46a1-a144-04925a078e5a
 stream = timer(100, Int(10 * round(100 / speed))) |> 
 	map_to(process) |> 
 	map(Tuple, generate_next!) |>
 	share_replay(1)
 
-# ╔═╡ dc93fbc9-5c2c-4c97-bf46-6dd24bc24fe4
-begin
-	if stop_cb_reference[] !== nothing
-		stop_cb_reference[]()
-	end
-	
-	if inference_subscription_reference[] !== nothing
-		unsubscribe!(inference_subscription_reference[])
-	end
-	
-	local data_stream = stream |> map(Any, d -> d[2][end])
-	
-	inferred_stream, start_cb, stop_cb = inference_filtering(data_stream, A, P, Q)
-	
-	local inferred_buffer = CircularBuffer{Marginal}(npoints)
-	
-	inference_subscription_reference[] = 
-		subscribe!(inferred_stream, (marginal) -> begin 
-			try 
-				push!(inferred_buffer, marginal)
-				
-				local ms = mean.(inferred_buffer)
-				local σ = var.(inferred_buffer)
-				
-				# @show σ
-				
-				inferred_states[] = ms
-				
-				inferred_band_1[] = 
-					map(r -> Point2f0(r[1][1] + r[2][1], r[1][1] - r[2][1]), 
-					zip(ms, σ)
-				)
-				
-				inferred_band_2[] = 
-					map(r -> Point2f0(r[1][2] + r[2][2], r[1][2] - r[2][2]), 
-					zip(ms, σ)
-				)
-			catch e
-				println(e)
-			end
-		end)
-	
-	start_cb()
-	
-	stop_cb_reference[] = stop_cb
-end
+# ╔═╡ 0f2b1375-fe83-47b9-b23d-a6051b6175ce
+filtering_data_stream = stream |> map(Any, d -> d[2][end])
 
 # ╔═╡ 5a4a85d1-bfa9-4451-84e7-835d2e9c610e
 function generate_static(pendulum::DataGenerationProcess, npoints::Int; rng = nothing)
 	
 	rng = rng === nothing ? Random.GLOBAL_RNG : MersenneTwister(rng)
 	
-	initial_state       = Point2f0(5.0, 0.0)
+	initial_state       = Point2f0(1.0, 0.0)
 	initial_observation = rand(rng, MvNormal(initial_state, pendulum.observation_noise))
 	
 	x_k = Vector{Point2f0}(undef, npoints)
@@ -381,64 +436,13 @@ function generate_static(pendulum::DataGenerationProcess, npoints::Int; rng = no
 	return x_k, y_k
 end
 
-# ╔═╡ 20442224-6b3e-4def-8921-05178156fa4f
-begin
-	local rng = 123
-	local npoints = 300
-	local P = [ 5.0 0.0; 0.0 5.0 ]
-	local Q = [ 100.0 0.0; 0.0 100.0 ]
-	local process = DataGenerationProcess(π / 30, npoints, P, Q)
-	local A = process.state_transition_matrix
-	local x, y  = generate_static(process, npoints; rng = rng)
-	local data_stream = from(y)
-	
-	local xmarginal_stream, start_cb, stop_cb = inference_filtering(
-		data_stream, A, P, Q
-	)
-	
-	local xkeep = keep(Marginal)
-	local subscription = subscribe!(xmarginal_stream, xkeep)
-	
-	start_cb()
-	stop_cb()
-	
-	unsubscribe!(subscription)
-	
-	local marginals = getvalues(xkeep)
-	
-	local range = 1:npoints
-	local dim   = (d) -> (a) -> map(e -> e[d...], a[range])
-	
-	local p1 = Plots.plot()
-	local p2 = Plots.plot()
-	
-	p1 = Plots.scatter!(p1, y |> dim(1), ms = 2, label = "Observations")
-	p1 = Plots.plot!(p1, x |> dim(1), label = "States")
-	p1 = Plots.plot!(p1, 
-		mean.(marginals) |> dim(1), ribbon = std.(marginals) |> dim((1, 1)),
-		label = "Estimates"
-	)
-	
-	p2 = Plots.scatter!(p2, y |> dim(2), ms = 2, label = "Observations")
-	p2 = Plots.plot!(p2, x |> dim(2), label = "States")
-	p2 = Plots.plot!(p2, 
-		mean.(marginals) |> dim(2), ribbon = std.(marginals) |> dim((2, 2)),
-		label = "Estimates"
-	)
-	
-	Plots.plot(p1, p2, layout = Plots.@layout([ a; b ]), size = (800, 600))
-end
-
-# ╔═╡ e8deb519-97dd-4a7d-8fdb-78689e9483f5
-generate_static(r, npoints)
-
 # ╔═╡ a3fdf5ea-a1db-45f8-8e61-bdbdba083fd3
 begin 
-	local rng = 123
-	local npoints = 300
-	local P = [ 5.0 0.0; 0.0 5.0 ]
-	local Q = [ 100.0 0.0; 0.0 100.0 ]
-	local process = DataGenerationProcess(π / 30, npoints, P, Q)
+	local rng = smoothing_seed
+	local npoints = smoothing_npoints
+	local P = smoothing_state_transition_noise
+	local Q = smoothing_observations_noise
+	local process = DataGenerationProcess(smoothing_angle, npoints, P, Q)
 	local A = process.state_transition_matrix
 	local x, y  = generate_static(process, npoints; rng = rng)
 	
@@ -497,54 +501,253 @@ macro guard_subscription(if_expression)
 end
 
 # ╔═╡ b7ae53d3-526f-44fa-91df-88d0a7b59d9b
-@guard_subscription if is_subscribed
-	subscription[] = subscribe!(stream, (data) -> begin
-		try
-			states, observations = data[1], data[2]
+# @guard_subscription macro is used to have a better control over reactive subscription/unsubscription process in Pluto notebooks
+@guard_subscription if is_data_generation_subscribed
+	data_generation_subscription[] = subscribe!(stream, data_generation_callback)	
+end
 
-			real_states[]  = states
-			noisy_states[] = observations
-		catch e
-			println(e)
-		end
-	end)	
+# ╔═╡ b48116bf-8963-425c-9ca3-5c2426b322a2
+md"""
+## Rocket.jl Utilities
+"""
+
+# ╔═╡ 157e211e-6e41-4429-b506-5f66c64a3fa2
+md"""
+Here we have some extra operators for Rocket.jl library
+"""
+
+# ╔═╡ e2659c7b-ae5e-4ad4-bcf2-35bec172e13f
+md"""
+`tap_on_subscribe_after` operator forces observable to call a `tapFn` right after subscription.
+"""
+
+# ╔═╡ 2ed4643f-c9c6-4a8c-ac2e-7795365a22dd
+begin
+	tap_on_subscribe_after(tapFn::F) where { F <: Function } = TapOnSubscribeAfterOperator{F}(tapFn)
+	
+	struct TapOnSubscribeAfterOperator{F} <: InferableOperator
+	    tapFn :: F
+	end
+	
+	Rocket.operator_right(operator::TapOnSubscribeAfterOperator, ::Type{L}) where L = L
+	
+	function Rocket.on_call!(::Type{L}, ::Type{L}, operator::TapOnSubscribeAfterOperator{F}, source) where { L, F }
+	    return Rocket.proxy(L, source, TapOnSubscribeAfterProxy{F}(operator.tapFn))
+	end
+	
+	struct TapOnSubscribeAfterProxy{F} <: SourceProxy
+	    tapFn :: F
+	end
+	
+	Rocket.source_proxy!(::Type{L}, proxy::TapOnSubscribeAfterProxy{F}, source::S) where { L, S, F } = TapOnSubscribeSourceAfter{L, S, F}(proxy.tapFn, source)
+	
+	struct TapOnSubscribeSourceAfter{L, S, F} <: Subscribable{L}
+	    tapFn  :: F
+	    source :: S
+	end
+	
+	function Rocket.on_subscribe!(source::TapOnSubscribeSourceAfter, actor)
+		subscription = subscribe!(source.source, actor)
+		source.tapFn()
+		return subscription
+	end
+	
+	Base.show(io::IO, ::TapOnSubscribeAfterOperator) = print(io, "TapOnSubscribeAfterOperator()")
+	Base.show(io::IO, ::TapOnSubscribeAfterProxy) = print(io, "TapOnSubscribeAfterProxy()")
+	Base.show(io::IO, ::TapOnSubscribeSourceAfter{L}) where L = print(io, "TapOnSubscribeSourceAfter($L)")
+end
+
+# ╔═╡ 469035f5-4c44-484c-9516-326e5061216f
+md"""
+`tap_on_unsubscribe` operator forces observable to call a `tapFn` right before unsubscription.
+"""
+
+# ╔═╡ 90138c8d-d6ba-4e70-8941-72f085c8de63
+begin
+	tap_on_unsubscribe(tapFn::F) where { F <: Function } = TapOnUnsubscribeOperator{F}(tapFn)
+	
+	struct TapOnUnsubscribeOperator{F} <: InferableOperator
+	    tapFn :: F
+	end
+	
+	Rocket.operator_right(operator::TapOnUnsubscribeOperator, ::Type{L}) where L = L
+	
+	function Rocket.on_call!(::Type{L}, ::Type{L}, operator::TapOnUnsubscribeOperator{F}, source) where { L, F }
+	    return Rocket.proxy(L, source, TapOnUnsubscribeProxy{F}(operator.tapFn))
+	end
+	
+	struct TapOnUnsubscribeProxy{F} <: SourceProxy
+	    tapFn :: F
+	end
+	
+	Rocket.source_proxy!(::Type{L}, proxy::TapOnUnsubscribeProxy{F}, source::S) where { L, S, F } = TapOnUnsubscribeSource{L, S, F}(proxy.tapFn, source)
+	
+	struct TapOnUnsubscribeSource{L, S, F} <: Subscribable{L}
+	    tapFn  :: F
+	    source :: S
+	end
+	
+	struct TapOnUnsubscribeSubscription{S, F} <: Teardown
+		tapFn        :: F
+		subscription :: S
+	end
+	
+	Rocket.as_teardown(::Type{ <: TapOnUnsubscribeSubscription }) = Rocket.UnsubscribableTeardownLogic()
+	
+	function Rocket.on_unsubscribe!(subscription::TapOnUnsubscribeSubscription)
+		subscription.tapFn()
+		return unsubscribe!(subscription.subscription)
+	end
+	
+	function Rocket.on_subscribe!(source::TapOnUnsubscribeSource, actor)
+	    return TapOnUnsubscribeSubscription(source.tapFn, subscribe!(source.source, actor))
+	end
+	
+	Base.show(io::IO, ::TapOnUnsubscribeOperator) = print(io, "TapOnUnsubscribeOperator()")
+	Base.show(io::IO, ::TapOnUnsubscribeProxy) = print(io, "TapOnUnsubscribeProxy()")
+	Base.show(io::IO, ::TapOnUnsubscribeSource{L}) where L = print(io, "TapOnUnsubscribeSource($L)")
+	Base.show(io::IO, ::TapOnUnsubscribeSubscription) = print(io, "TapOnUnsubscribeSubscription()")
+end
+
+# ╔═╡ c4cc673c-4d44-44df-89b0-68744d473a15
+function inference_filtering(data_stream, A, P, Q)
+	
+	model, (x_prev_mean, x_prev_cov, x, y) = one_time_step_graph(A, P, Q)
+	
+	data_subscription  = Ref{Teardown}(voidTeardown)
+	prior_subscription = Ref{Teardown}(voidTeardown)
+	
+	start_cb = () -> begin
+		ReactiveMP.update!(x_prev_mean, [ 0.0, 0.0 ])
+		ReactiveMP.update!(x_prev_cov, [ 100.0 0.0; 0.0 100.0 ])
+		
+		prior_subscription[] = subscribe!(getmarginal(x), (mx) -> begin
+			μ, Σ = mean_cov(mx)
+			ReactiveMP.update!(x_prev_mean, μ)
+			ReactiveMP.update!(x_prev_cov, Σ)	
+		end)
+		
+		data_subscription[] = subscribe!(data_stream, (d) -> begin 
+			ReactiveMP.update!(y, convert(Vector{Float64}, d))
+		end)
+	end
+	
+	stop_cb = () -> begin
+		unsubscribe!(data_subscription[])
+		unsubscribe!(prior_subscription[])
+	end
+	
+	return getmarginal(x) |> 
+		tap_on_subscribe_after(start_cb) |> 
+		tap_on_unsubscribe(stop_cb)
+end
+
+# ╔═╡ f3c67020-ee41-4e2d-92db-3c1c62425dca
+inferred_stream = inference_filtering(filtering_data_stream, A, P, Q)
+
+# ╔═╡ d92dcc1b-4374-44ec-81b0-3fb74b4a9807
+@guard_subscription if is_inference_subscribed
+	inference_subscription[] = subscribe!(inferred_stream, inference_callback)
+end
+
+# ╔═╡ 20442224-6b3e-4def-8921-05178156fa4f
+begin
+	local rng = filtering_seed
+	local npoints = filtering_npoints
+	local P = filtering_state_transition_noise
+	local Q = fittering_observations_noise
+	local process = DataGenerationProcess(filtering_angle, npoints, P, Q)
+	local A = process.state_transition_matrix
+	local x, y  = generate_static(process, npoints; rng = rng)
+	local data_stream = from(y)
+	
+	local xmarginal_stream = inference_filtering(
+		data_stream, A, P, Q
+	)
+	
+	local xkeep = keep(Marginal)
+	local subscription = subscribe!(xmarginal_stream, xkeep)
+	
+	unsubscribe!(subscription)
+	
+	local marginals = getvalues(xkeep)
+	
+	local range = 1:npoints
+	local dim   = (d) -> (a) -> map(e -> e[d...], a)
+	
+	local p1 = Plots.plot()
+	local p2 = Plots.plot()
+	
+	p1 = Plots.scatter!(p1, y |> dim(1), ms = 2, label = "Observations")
+	p1 = Plots.plot!(p1, x |> dim(1), label = "States")
+	p1 = Plots.plot!(p1, 
+		mean.(marginals) |> dim(1), ribbon = std.(marginals) |> dim((1, 1)),
+		label = "Estimates"
+	)
+	
+	p2 = Plots.scatter!(p2, y |> dim(2), ms = 2, label = "Observations")
+	p2 = Plots.plot!(p2, x |> dim(2), label = "States")
+	p2 = Plots.plot!(p2, 
+		mean.(marginals) |> dim(2), ribbon = std.(marginals) |> dim((2, 2)),
+		label = "Estimates"
+	)
+	
+	Plots.plot(p1, p2, layout = Plots.@layout([ a; b ]), size = (800, 600))
 end
 
 # ╔═╡ Cell order:
 # ╠═773890b4-f844-4a2b-946b-b56f7f6ac375
 # ╠═3f028a44-cdd0-11eb-2fb0-6b696babeb9b
 # ╠═bdf461c7-918d-4f78-968d-aa3dfd11d3b0
-# ╟─08ec8032-40ba-4bef-9dce-53389a531cab
-# ╠═a91b698e-24fc-47d0-9742-b6a151eacdd3
-# ╟─12f072b6-1e9d-42d0-9784-15ab2ed32e1c
-# ╟─c189ddad-c8f6-45c4-9cec-8d72a09f98cf
-# ╠═aa3f4b38-ff13-492b-9eb3-bda2c80f5c5d
+# ╟─bc84b4d8-8916-4081-9d86-9322d8f4d200
+# ╟─bb1e524b-7cff-412a-8c05-d60a350f28b8
+# ╠═65125537-9ee9-4b2d-92be-45ee1a914b24
+# ╠═fa7fbcbc-e229-4553-88a8-17c53779725d
+# ╟─c135e271-10d3-4deb-abf2-6d5f65a6fc78
 # ╠═5be725e6-732d-42e3-8967-3e8251946d72
-# ╠═61952b04-cc7e-46f2-b273-854e425866ca
-# ╠═d5c1b0e8-fd51-4312-a06f-0287aad184ba
+# ╟─5752f563-22ef-4e9e-a3d0-6630cc911248
+# ╠═00844a01-0ccd-48d9-a961-ea1d8383da70
+# ╟─6860f6cd-7507-455c-85e1-a89afea8890e
 # ╠═399a5b08-ce77-4864-a957-d0be1d6468c1
+# ╟─f5fe83ad-3be9-4d2c-85ad-da7633d7367e
 # ╠═de00e97d-e8a8-46a1-a144-04925a078e5a
+# ╠═61f29db3-6deb-47ca-8473-f9ead5d9d2f0
 # ╠═b7ae53d3-526f-44fa-91df-88d0a7b59d9b
-# ╠═d5a38b62-eceb-4223-be3a-d7e2908c53ee
-# ╠═3a3ed6e1-9fe7-4a65-bde5-5b44e49f928b
-# ╠═dc93fbc9-5c2c-4c97-bf46-6dd24bc24fe4
-# ╠═554bbbcc-6433-4731-8a7e-6aad6ace22e4
-# ╠═54043ff7-05f2-48ef-89f4-050379eba3f9
+# ╟─1b31dfed-7bbf-4c12-a70c-a3dbb7854d9d
+# ╠═ab1148c0-16bf-4f14-874a-b06878c8e538
+# ╠═2e3b739c-de1a-46ed-93cd-cdb3dda8c7b2
+# ╠═0f2b1375-fe83-47b9-b23d-a6051b6175ce
+# ╠═f3c67020-ee41-4e2d-92db-3c1c62425dca
+# ╠═736867b0-d0b6-41b9-b4cc-b0de734714fa
+# ╟─f670169a-72d9-4e55-b8ce-a6db4baec53b
+# ╠═aa7b11f4-6a37-4c70-9fdf-174d9e1e2c3a
+# ╠═d92dcc1b-4374-44ec-81b0-3fb74b4a9807
+# ╠═d5c1b0e8-fd51-4312-a06f-0287aad184ba
+# ╟─8b2113ff-6ade-40b5-87e9-3a62614e2a72
+# ╟─54043ff7-05f2-48ef-89f4-050379eba3f9
 # ╟─1eedb961-877d-4481-9441-b7b04c0cd361
 # ╠═b8caf0eb-aad9-4506-823c-b7ecc23caf7c
 # ╠═c4cc673c-4d44-44df-89b0-68744d473a15
-# ╠═20442224-6b3e-4def-8921-05178156fa4f
-# ╠═e8deb519-97dd-4a7d-8fdb-78689e9483f5
+# ╠═36344f8d-1fbb-4b54-b17e-46edcebb6c7d
+# ╟─20442224-6b3e-4def-8921-05178156fa4f
 # ╟─a814a9fe-6c76-4e75-9b0d-7141e18d1f9d
 # ╠═a327b4f6-b8b9-4536-b45d-c13b767a3606
 # ╠═65894eb0-99a6-4d29-a23d-bbe1dab4a2e8
-# ╠═a3fdf5ea-a1db-45f8-8e61-bdbdba083fd3
-# ╠═21b44508-ec16-4f15-9ba1-97fce4667873
+# ╠═621bebd0-492e-49fc-a58a-ecaee47286f6
+# ╟─a3fdf5ea-a1db-45f8-8e61-bdbdba083fd3
 # ╟─39b43b20-915b-44a6-947e-170234eae68a
+# ╟─e59d6d36-d576-4b2d-a66b-a03e780afc9c
 # ╟─e738bbf7-8a66-411c-82f9-9716f749f30b
 # ╠═649214d2-b661-49f5-ac36-50da9e358675
+# ╠═5d74139d-f61c-4a63-a7bd-35c20f5c04af
 # ╠═fae6b763-658c-4e89-a0c3-477612e6312f
 # ╠═5a4a85d1-bfa9-4451-84e7-835d2e9c610e
 # ╟─1996542b-c7aa-4bfe-ab60-9359407c8ad5
 # ╟─e4cfe8a2-fdd6-4c2c-acc9-8da715afbc8f
 # ╠═b226adcc-e696-4336-8a6c-314295c59be3
+# ╟─b48116bf-8963-425c-9ca3-5c2426b322a2
+# ╟─157e211e-6e41-4429-b506-5f66c64a3fa2
+# ╟─e2659c7b-ae5e-4ad4-bcf2-35bec172e13f
+# ╠═2ed4643f-c9c6-4a8c-ac2e-7795365a22dd
+# ╟─469035f5-4c44-484c-9516-326e5061216f
+# ╠═90138c8d-d6ba-4e70-8941-72f085c8de63
