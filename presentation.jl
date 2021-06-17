@@ -37,12 +37,57 @@ end
 # ╔═╡ 3f028a44-cdd0-11eb-2fb0-6b696babeb9b
 begin
 	using WGLMakie
-	WGLMakie.set_theme!(resolution = (1300, 800))
+	WGLMakie.set_theme!(resolution = (1350, 800))
 end
+
+# ╔═╡ 1eedb961-877d-4481-9441-b7b04c0cd361
+md"""
+## Filtering model
+"""
+
+# ╔═╡ b8caf0eb-aad9-4506-823c-b7ecc23caf7c
+# `@model` macro accepts just a regular Julia function
+@model function one_time_step_graph(A, P, Q)
+	
+	# `datavar` creates a data input in the model
+	# later on during inference procedure we are allowed 
+	# to pass data in form of a delta distribution using 
+	# datavar references
+	x_prev_mean = datavar(Vector{Float64})
+	x_prev_cov  = datavar(Matrix{Float64})
+	
+	# here `x_prev` is our prior knowledge about previous state of 
+	# in our model at time step k - 1 
+	# At k = 0 `x_prev` acts as an initial prior
+	x_prev ~ MvNormalMeanCovariance(x_prev_mean, x_prev_cov)
+	
+	# `x` is the current state at time step k
+	x ~ MvNormalMeanCovariance(A * x_prev, P)
+	
+	# `y` is an observation 
+	y = datavar(Vector{Float64})
+	
+	y ~ MvNormalMeanCovariance(x, Q)
+	
+	# We return all references for later usage
+	# during inference procedure
+	return x_prev_mean, x_prev_cov, x, y
+end
+
+# ╔═╡ 36344f8d-1fbb-4b54-b17e-46edcebb6c7d
+begin 
+	filtering_seed    = 123
+	filtering_npoints = 500
+	
+	filtering_angle = π / 100
+	
+	filtering_state_transition_noise = [ 1.0 0.0; 0.0 1.0 ]
+	fittering_observations_noise     = [ 200.0 0.0; 0.0 200.0 ]
+end;
 
 # ╔═╡ bc84b4d8-8916-4081-9d86-9322d8f4d200
 md"""
-### Setup 
+### Real-time Setup 
 """
 
 # ╔═╡ bb1e524b-7cff-412a-8c05-d60a350f28b8
@@ -72,7 +117,7 @@ As our synthetic stream of data we create a timer observable, which emits a numb
 
 # ╔═╡ 1b31dfed-7bbf-4c12-a70c-a3dbb7854d9d
 md"""
-### Inference setup
+### Real-time inference setup
 """
 
 # ╔═╡ f670169a-72d9-4e55-b8ce-a6db4baec53b
@@ -84,14 +129,14 @@ begin
 
 	# How many points are used for plotting
 	# Inference does not use this parameter since we do Kalman filtering
-	npoints = 100
+	npoints = 150
 	
 	# Rate at which data points are generated, should be somewhere 
 	# between 10 and 100
-	speed = 70
+	speed = 50
 	
 	# Angle used in rotation matrix, specifies angle change rate
-	angle = π / 100
+	angle = π / 70
 	
 	A = [ cos(angle) -sin(angle); sin(angle) cos(angle) ]
 	
@@ -121,19 +166,54 @@ begin
 	fill!(inferred_buffer, ReactiveMP.Marginal(PointMass([ 0.0, 0.0 ]), false, false))
 end;
 
+# ╔═╡ a83a421f-0ffb-452d-a112-178b4c7b4ebd
+begin 
+	connect_noise_observations_check_box = 
+		@bind is_observations_connected CheckBox(default = false);
+end;
+
+# ╔═╡ 0033f1f2-c84b-47d5-8a58-1f57822c9a25
+md"""
+Select 'Show data' checkbox to subscribe on a real-time data generation process and visualise it on an interactive pane below.
+
+Select 'Run inference' checkbox to subscribe on the real-time inference procedure. Inference uses the same realtime data set for inference and state estimation.
+
+Select 'Connect observations' to connect observations points with a line.
+"""
+
 # ╔═╡ 54043ff7-05f2-48ef-89f4-050379eba3f9
 begin
-	sleep(0.5)
 	local f = Figure()
+	
+	on(events(f).mousebutton) do event
+		return true
+	end
+	
+	on(events(f).mouseposition) do event
+		return true
+	end
+	
+	on(events(f).scroll) do event
+		return true
+	end
 	
 	local colors_data = collect(cgrad(:Blues_9, npoints))
 	local colors_inferred = collect(cgrad(:Reds_9, npoints))
-	local sizes  = range(4, 8, length=npoints)
+	local sizes  = abs2.(range(1, 3, length=npoints))	
+	local widths = range(0, 2, length = npoints)
 	
 	scatter(f[1, 1], noisy_states, markersize = sizes, color = :green)
-	lines!(f[1, 1], real_states, linewidth = sizes, color = colors_data)
-	lines!(f[1, 1], inferred_states, linewidth = sizes, color = colors_inferred)
+	lines!(f[1, 1], 
+		real_states, linewidth = sizes, color = colors_data, 
+	)
+	lines!(f[1, 1], 
+		inferred_states, linewidth = sizes, color = colors_inferred,
+	)
 	limits!(-50, 50, -50, 50)
+	
+	axis11 = Axis(f[1, 1])
+	axis11.ylabel = "y-position" 
+	axis11.xlabel = "x-position" 
 	
 	inferred_states_dim1 = map(i -> map(r -> r[1], i), inferred_states)
 	inferred_states_dim2 = map(i -> map(r -> r[2], i), inferred_states)
@@ -157,7 +237,14 @@ begin
 	)
 	lines!(f[1, 2][1, 1], states_dim1, color = colors_data)
 	scatter!(f[1, 2][1, 1], noisy_dim1, markersize = sizes, color = :green)
+	if is_observations_connected
+		lines!(f[1, 2][1, 1], noisy_dim1, linewidth = widths, color = :green)
+	end
 	limits!(0, npoints, -50, 50)
+	
+	axis1211 = Axis(f[1, 2][1, 1])
+	axis1211.ylabel = "x-position" 
+	axis1211.xlabel = "Time step" 
 	
 	lines(f[1, 2][2, 1], inferred_states_dim2, color = colors_inferred)
 	band!(f[1, 2][2, 1], 
@@ -166,58 +253,42 @@ begin
 	)
 	lines!(f[1, 2][2, 1], states_dim2, color = colors_data)
 	scatter!(f[1, 2][2, 1], noisy_dim2, markersize = sizes, color = :green)
-
+	if is_observations_connected
+		lines!(f[1, 2][2, 1], noisy_dim2, linewidth = widths, color = :green)
+	end
 	limits!(0, npoints, -50, 50)
+	
+	axis1211 = Axis(f[1, 2][2, 1])
+	axis1211.ylabel = "y-position" 
+	axis1211.xlabel = "Time step" 
 	
 	inferred_fig = current_figure()
 end
-
-# ╔═╡ 1eedb961-877d-4481-9441-b7b04c0cd361
-md"""
-## Filtering model
-"""
-
-# ╔═╡ b8caf0eb-aad9-4506-823c-b7ecc23caf7c
-@model function one_time_step_graph(A, P, Q)
-	
-	x_prev_mean = datavar(Vector{Float64})
-	x_prev_cov  = datavar(Matrix{Float64})
-	
-	x_prev ~ MvNormalMeanCovariance(x_prev_mean, x_prev_cov)
-	x ~ MvNormalMeanCovariance(A * x_prev, P)
-	
-	y = datavar(Vector{Float64})
-	y ~ MvNormalMeanCovariance(x, Q)
-	
-	return x_prev_mean, x_prev_cov, x, y
-end
-
-# ╔═╡ 36344f8d-1fbb-4b54-b17e-46edcebb6c7d
-begin 
-	filtering_seed    = 123
-	filtering_npoints = 300
-	
-	filtering_angle = π / 30
-	
-	filtering_state_transition_noise = [ 1.0 0.0; 0.0 1.0 ]
-	fittering_observations_noise     = [ 200.0 0.0; 0.0 200.0 ]
-end;
 
 # ╔═╡ a814a9fe-6c76-4e75-9b0d-7141e18d1f9d
 md"""
 ## Smoothing model
 """
 
+# ╔═╡ ea8f35f0-08da-4dee-bab5-69dd81e8ab3b
+md"""
+ReactiveMP.jl is flexible enough to run inference on full-graph with a static datasets. In this example we show smoothing algorithm with a sum-product by message passing.
+"""
+
 # ╔═╡ a327b4f6-b8b9-4536-b45d-c13b767a3606
+# Here we create a full graph 
 @model function full_graph(npoints, A, P, Q)
 	
-	x = randomvar(npoints)
-	y = datavar(Vector{Float64}, npoints)
+	x = randomvar(npoints) # A sequence of random variables with length `npoints`
+	y = datavar(Vector{Float64}, npoints) # A sequence of data inputs
 	
+	# `constvar` creates a constant reference for constants in a model
+	# (unnecessary for actual inference, but only for better performance)
 	cA = constvar(A)
 	cP = constvar(P)
 	cQ = constvar(Q)
 	
+	# Our model specification resembles closely to the actual equations
 	x[1] ~ MvNormalMeanCovariance([ 0.0, 0.0 ], [ 100.0 0.0; 0.0 100.0 ])
 	y[1] ~ MvNormalMeanCovariance(x[1], cQ)
 	
@@ -232,9 +303,11 @@ end
 # ╔═╡ 65894eb0-99a6-4d29-a23d-bbe1dab4a2e8
 function inference_smoothing(data, A, P, Q)
 
+	# We assume static dataset here
 	data    = convert(AbstractVector{Vector{Float64}}, data)
 	npoints = length(data)
 	
+	# We use `limit_stack_depth` option for huge models with thousands of nodes
 	model, (x, y) = full_graph(npoints, A, P, Q, options = (
 		limit_stack_depth = 500,
 	))
@@ -242,21 +315,29 @@ function inference_smoothing(data, A, P, Q)
 	xbuffer    = buffer(Marginal, npoints)
 	xmarginals = getmarginals(x)
 	
+	# As soon as new marginals are available 
+	# we want to save them in the `xbuffer`
 	subscription = subscribe!(xmarginals, xbuffer)
 	
+	# Because we assume a static dataset our workflow is easier then in a 
+	# reactive real-time filtering. We may just pass all data we have and wait 
+	# sycnrhonously for all posterior marginals to be updated
 	ReactiveMP.update!(y, data)
 	
+	# It is a good practise to unsubscribe, 
+	# though in this example it is unecessary 
 	unsubscribe!(subscription)
 	
+	# Inference results
 	return getvalues(xbuffer)
 end
 
 # ╔═╡ 621bebd0-492e-49fc-a58a-ecaee47286f6
 begin 
-	smoothing_seed    = 42
-	smoothing_npoints = 300
+	smoothing_seed    = 44
+	smoothing_npoints = 500
 	
-	smoothing_angle = π / 30
+	smoothing_angle = π / 20
 	
 	smoothing_state_transition_noise = [ 1.0 0.0; 0.0 1.0 ]
 	smoothing_observations_noise     = [ 200.0 0.0; 0.0 200.0 ]
@@ -326,6 +407,11 @@ end;
 # ╔═╡ aa7b11f4-6a37-4c70-9fdf-174d9e1e2c3a
 inference_callback = (marginal) -> begin
 	try 
+		
+		# Every time a new posterio marginal is available
+		# we put in our circular buffer and pass new values 
+		# to Makie.jl visualisation backend to plot new values
+		
 		push!(inferred_buffer, marginal)
 		
 		local ms = mean.(inferred_buffer)
@@ -345,7 +431,11 @@ inference_callback = (marginal) -> begin
 end
 
 # ╔═╡ 8b2113ff-6ade-40b5-87e9-3a62614e2a72
-md"Show data? $(data_generation_check_box) Run inference? $(inference_check_box)"
+md"
+Show data? $(data_generation_check_box) 
+Run inference? $(inference_check_box)
+Connect observations? $(connect_noise_observations_check_box)
+"
 
 # ╔═╡ e738bbf7-8a66-411c-82f9-9716f749f30b
 md"""
@@ -402,11 +492,11 @@ function make(::Type{ <: DataGenerationProcess }, angle::Float64, npoints, snois
 end
 
 # ╔═╡ 399a5b08-ce77-4864-a957-d0be1d6468c1
-process = make(DataGenerationProcess, angle, npoints, P, Q);
+realtime_data = make(DataGenerationProcess, angle, npoints, P, Q);
 
 # ╔═╡ de00e97d-e8a8-46a1-a144-04925a078e5a
 stream = timer(100, Int(10 * round(100 / speed))) |> 
-	map_to(process) |> 
+	map_to(realtime_data) |> 
 	map(Tuple, generate_next!) |>
 	share_replay(1)
 
@@ -610,44 +700,64 @@ begin
 end
 
 # ╔═╡ c4cc673c-4d44-44df-89b0-68744d473a15
+# ReactiveMP.jl does not export any default inference procedure like 
+# other PPL libraries do. Instead user is free to implement their own 
+# inference tasks. In this example we create an inference procedure which 
+# is compatible both with reactive infinite real-time data streams and with 
+# static datasets
 function inference_filtering(data_stream, A, P, Q)
 	
+	# First we create our model 
+	# `@model` generated function returns `model` reference 
+	# and the same output in `return` statement as a second argument
 	model, (x_prev_mean, x_prev_cov, x, y) = one_time_step_graph(A, P, Q)
 	
+	# These are helper references for later usage in callbacks
 	data_subscription  = Ref{Teardown}(voidTeardown)
 	prior_subscription = Ref{Teardown}(voidTeardown)
 	
-	start_cb = () -> begin
+	# `getmarginal` function return an observable of posterior marginals
+	x_posterior_marginals_observable = getmarginal(x)
+	
+	# This function will be called when someone subscribes on a stream 
+	# of posterior marginals
+	start_callback = () -> begin
+		
+		# At the very beginning we use `update!` function 
+		# to pass our initial prior 
 		ReactiveMP.update!(x_prev_mean, [ 0.0, 0.0 ])
 		ReactiveMP.update!(x_prev_cov, [ 100.0 0.0; 0.0 100.0 ])
 		
+		# Here we create an inifnite reaction loop 
+		# As soon as new posterior marginal is available we redirect 
+		# it as our new prior for previous time step to continue 
+		# with the next time step
 		prior_subscription[] = subscribe!(getmarginal(x), (mx) -> begin
+				
 			μ, Σ = mean_cov(mx)
+				
 			ReactiveMP.update!(x_prev_mean, μ)
 			ReactiveMP.update!(x_prev_cov, Σ)	
+				
 		end)
 		
+		# We subscribe on a data stream and redirect all data 
+		# to the observations `datavar` input
 		data_subscription[] = subscribe!(data_stream, (d) -> begin 
 			ReactiveMP.update!(y, convert(Vector{Float64}, d))
 		end)
 	end
 	
-	stop_cb = () -> begin
+	# This function will be called when someone unsubscribes from a stream 
+	# of posterior marginals
+	stop_callback = () -> begin
 		unsubscribe!(data_subscription[])
 		unsubscribe!(prior_subscription[])
 	end
 	
-	return getmarginal(x) |> 
-		tap_on_subscribe_after(start_cb) |> 
-		tap_on_unsubscribe(stop_cb)
-end
-
-# ╔═╡ f3c67020-ee41-4e2d-92db-3c1c62425dca
-inferred_stream = inference_filtering(filtering_data_stream, A, P, Q)
-
-# ╔═╡ d92dcc1b-4374-44ec-81b0-3fb74b4a9807
-@guard_subscription if is_inference_subscribed
-	inference_subscription[] = subscribe!(inferred_stream, inference_callback)
+	return x_posterior_marginals_observable |> 
+		tap_on_subscribe_after(start_callback) |> 
+		tap_on_unsubscribe(stop_callback)
 end
 
 # ╔═╡ 20442224-6b3e-4def-8921-05178156fa4f
@@ -695,10 +805,23 @@ begin
 	Plots.plot(p1, p2, layout = Plots.@layout([ a; b ]), size = (800, 600))
 end
 
+# ╔═╡ f3c67020-ee41-4e2d-92db-3c1c62425dca
+inferred_stream = inference_filtering(filtering_data_stream, A, P, Q)
+
+# ╔═╡ d92dcc1b-4374-44ec-81b0-3fb74b4a9807
+@guard_subscription if is_inference_subscribed
+	inference_subscription[] = subscribe!(inferred_stream, inference_callback)
+end
+
 # ╔═╡ Cell order:
 # ╠═773890b4-f844-4a2b-946b-b56f7f6ac375
 # ╠═3f028a44-cdd0-11eb-2fb0-6b696babeb9b
 # ╠═bdf461c7-918d-4f78-968d-aa3dfd11d3b0
+# ╟─1eedb961-877d-4481-9441-b7b04c0cd361
+# ╠═b8caf0eb-aad9-4506-823c-b7ecc23caf7c
+# ╠═c4cc673c-4d44-44df-89b0-68744d473a15
+# ╠═36344f8d-1fbb-4b54-b17e-46edcebb6c7d
+# ╟─20442224-6b3e-4def-8921-05178156fa4f
 # ╟─bc84b4d8-8916-4081-9d86-9322d8f4d200
 # ╟─bb1e524b-7cff-412a-8c05-d60a350f28b8
 # ╠═65125537-9ee9-4b2d-92be-45ee1a914b24
@@ -720,17 +843,15 @@ end
 # ╠═f3c67020-ee41-4e2d-92db-3c1c62425dca
 # ╠═736867b0-d0b6-41b9-b4cc-b0de734714fa
 # ╟─f670169a-72d9-4e55-b8ce-a6db4baec53b
-# ╠═aa7b11f4-6a37-4c70-9fdf-174d9e1e2c3a
+# ╟─aa7b11f4-6a37-4c70-9fdf-174d9e1e2c3a
 # ╠═d92dcc1b-4374-44ec-81b0-3fb74b4a9807
 # ╠═d5c1b0e8-fd51-4312-a06f-0287aad184ba
+# ╟─a83a421f-0ffb-452d-a112-178b4c7b4ebd
+# ╟─0033f1f2-c84b-47d5-8a58-1f57822c9a25
 # ╟─8b2113ff-6ade-40b5-87e9-3a62614e2a72
 # ╟─54043ff7-05f2-48ef-89f4-050379eba3f9
-# ╟─1eedb961-877d-4481-9441-b7b04c0cd361
-# ╠═b8caf0eb-aad9-4506-823c-b7ecc23caf7c
-# ╠═c4cc673c-4d44-44df-89b0-68744d473a15
-# ╠═36344f8d-1fbb-4b54-b17e-46edcebb6c7d
-# ╟─20442224-6b3e-4def-8921-05178156fa4f
 # ╟─a814a9fe-6c76-4e75-9b0d-7141e18d1f9d
+# ╟─ea8f35f0-08da-4dee-bab5-69dd81e8ab3b
 # ╠═a327b4f6-b8b9-4536-b45d-c13b767a3606
 # ╠═65894eb0-99a6-4d29-a23d-bbe1dab4a2e8
 # ╠═621bebd0-492e-49fc-a58a-ecaee47286f6
