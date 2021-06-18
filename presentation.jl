@@ -74,14 +74,84 @@ md"""
 	return x_prev_mean, x_prev_cov, x, y
 end
 
+# ╔═╡ c4cc673c-4d44-44df-89b0-68744d473a15
+# ReactiveMP.jl does not export any default inference procedure like 
+# other PPL libraries do. Instead user is free to implement their own 
+# inference tasks. In this example we create an inference procedure which 
+# is compatible both with reactive infinite real-time data streams and with 
+# static datasets
+function inference_filtering(data_stream, A, P, Q)
+	
+	# First we create our model 
+	# `@model` generated function returns `model` reference 
+	# and the same output in `return` statement as a second argument
+	model, (x_prev_mean, x_prev_cov, x, y) = one_time_step_graph(A, P, Q)
+	
+	# These are helper references for later usage in callbacks
+	data_subscription  = Ref{Teardown}(voidTeardown)
+	prior_subscription = Ref{Teardown}(voidTeardown)
+	
+	# `getmarginal` function return an observable of posterior marginals
+	x_posterior_marginals_observable = getmarginal(x)
+	
+	# This function will be called when someone subscribes on a stream 
+	# of posterior marginals
+	start_callback = () -> begin
+		
+		# At the very beginning we use `update!` function 
+		# to pass our initial prior 
+		ReactiveMP.update!(x_prev_mean, [ 0.0, 0.0 ])
+		ReactiveMP.update!(x_prev_cov, [ 100.0 0.0; 0.0 100.0 ])
+		
+		# Here we create an inifnite reaction loop 
+		# As soon as new posterior marginal is available we redirect 
+		# it as our new prior for previous time step to continue 
+		# with the next time step
+		prior_subscription[] = subscribe!(getmarginal(x), (mx) -> begin
+				
+			μ, Σ = mean_cov(mx)
+				
+			ReactiveMP.update!(x_prev_mean, μ)
+			ReactiveMP.update!(x_prev_cov, Σ)	
+				
+		end)
+		
+		# We subscribe on a data stream and redirect all data 
+		# to the observations `datavar` input
+		data_subscription[] = subscribe!(data_stream, (d) -> begin 
+			ReactiveMP.update!(y, convert(Vector{Float64}, d))
+		end)
+	end
+	
+	# This function will be called when someone unsubscribes from a stream 
+	# of posterior marginals
+	stop_callback = () -> begin
+		unsubscribe!(data_subscription[])
+		unsubscribe!(prior_subscription[])
+	end
+	
+	return x_posterior_marginals_observable |> 
+		tap_on_subscribe(start_callback, TapAfterSubscription()) |> 
+		tap_on_unsubscribe(stop_callback)
+end
+
 # ╔═╡ 36344f8d-1fbb-4b54-b17e-46edcebb6c7d
+# Parameters for static inference example for LGSSM and 
+# Kalman filter by message passing
 begin 
-	filtering_seed    = 123
+	# Seed for reproducability
+	filtering_seed    = 42
+	
+	# Number of observations in static dataset
 	filtering_npoints = 500
 	
+	# Angle change rate
 	filtering_angle = π / 100
 	
+	# State transition noise
 	filtering_state_transition_noise = [ 1.0 0.0; 0.0 1.0 ]
+	
+	# Observations noise
 	fittering_observations_noise     = [ 200.0 0.0; 0.0 200.0 ]
 end;
 
@@ -149,15 +219,15 @@ end;
 
 # ╔═╡ 65125537-9ee9-4b2d-92be-45ee1a914b24
 begin 	
-	real_states = Node(map(_ -> Point2f0(1000.0, 1000.0), 1:npoints))
+	real_states  = Node(map(_ -> Point2f0(1000.0, 1000.0), 1:npoints))
 	noisy_states = Node(map(_ -> Point2f0(1000.0, 1000.0), 1:npoints))
 end;
 
 # ╔═╡ fa7fbcbc-e229-4553-88a8-17c53779725d
 begin 
-	inferred_states  = Node(map(_ -> Point2f0(rand(), rand()), 1:npoints))
-	inferred_band_up = Node(map(_ -> Point2f0(10, -10), 1:npoints))
-	inferred_band_lp = Node(map(_ -> Point2f0(10, -10), 1:npoints))
+	inferred_states  = Node(map(_ -> Point2f0(0, 0), 1:npoints))
+	inferred_band_up = Node(map(_ -> Point2f0(0, 0), 1:npoints))
+	inferred_band_lp = Node(map(_ -> Point2f0(0, 0), 1:npoints))
 end;
 
 # ╔═╡ 736867b0-d0b6-41b9-b4cc-b0de734714fa
@@ -179,6 +249,11 @@ Select 'Show data' checkbox to subscribe on a real-time data generation process 
 Select 'Run inference' checkbox to subscribe on the real-time inference procedure. Inference uses the same realtime data set for inference and state estimation.
 
 Select 'Connect observations' to connect observations points with a line.
+"""
+
+# ╔═╡ 261ca703-871a-4252-a056-157e7c48ae1c
+md"""
+Note: first selection may lag a little bit due to plotting compilation
 """
 
 # ╔═╡ 54043ff7-05f2-48ef-89f4-050379eba3f9
@@ -333,15 +408,43 @@ function inference_smoothing(data, A, P, Q)
 end
 
 # ╔═╡ 621bebd0-492e-49fc-a58a-ecaee47286f6
+# Parameters for static inference example for LGSSM and 
+# smoothing by message passing
 begin 
-	smoothing_seed    = 44
-	smoothing_npoints = 500
+	# Seed for reproducability
+	smoothing_seed    = 43
 	
-	smoothing_angle = π / 20
+	# Number of observations in static dataset
+	smoothing_npoints = 10000
 	
+	# Angle change rate
+	smoothing_angle = π / 100
+	
+	# State transition noise
 	smoothing_state_transition_noise = [ 1.0 0.0; 0.0 1.0 ]
+
+	# Observations noise
 	smoothing_observations_noise     = [ 200.0 0.0; 0.0 200.0 ]
 end;
+
+# ╔═╡ 0e2ca93e-f34b-4255-9b3b-f96b22bbad6a
+md"""
+For a lot of points plotting becomes really slow, here are some sliders to show only part of the inferred states
+"""
+
+# ╔═╡ ba7e8055-a4e6-4f6f-afe0-51192091f2f6
+begin 
+	smoothing_plot_window_size_slider = @bind smoothing_plot_window_size PlutoUI.Slider(1:smoothing_npoints, default = 1000, show_value = true)
+	
+	smoothing_window_start_slider = @bind smoothing_plot_window_start PlutoUI.Slider(1:smoothing_npoints, default = 1, show_value = true)
+	
+	md"""
+	Plot window size: $(smoothing_plot_window_size_slider) Window start: $(smoothing_window_start_slider)
+	"""
+end
+
+# ╔═╡ 3036773b-0ccf-4bc2-9275-feca31252c71
+smoothing_plot_range = smoothing_plot_window_start:min((smoothing_plot_window_start + smoothing_plot_window_size - 1), smoothing_npoints)
 
 # ╔═╡ 39b43b20-915b-44a6-947e-170234eae68a
 md"""
@@ -401,6 +504,8 @@ if !is_inference_subscribed
 		inferred_states[] = zeroed
 		inferred_band_up[] = zeroed
 		inferred_band_lp[] = zeroed
+		empty!(inferred_buffer)
+		fill!(inferred_buffer, ReactiveMP.Marginal(PointMass([ 0.0, 0.0 ]), false, false))
 	end
 end;
 
@@ -469,20 +574,23 @@ struct DataGenerationProcess
 end
 
 # ╔═╡ fae6b763-658c-4e89-a0c3-477612e6312f
-function generate_next!(pendulum::DataGenerationProcess)
-	x_k_min = last(pendulum.states)
+# generate_next! method generates update states and observatiobs for current process
+function generate_next!(process::DataGenerationProcess)
+	x_k_min = last(process.states)
 	
-	tmp = pendulum.state_transition_matrix * x_k_min
-	x_k = rand(MvNormal(tmp, pendulum.state_transition_noise))
-	y_k = rand(MvNormal(x_k, pendulum.observation_noise))
+	tmp = process.state_transition_matrix * x_k_min
+	x_k = rand(MvNormal(tmp, process.state_transition_noise))
+	y_k = rand(MvNormal(x_k, process.observation_noise))
 	
-	push!(pendulum.states, x_k)
-	push!(pendulum.observations, y_k)
+	push!(process.states, x_k)
+	push!(process.observations, y_k)
 	
-	return pendulum.states, pendulum.observations
+	return process.states, process.observations
 end
 
 # ╔═╡ 5d74139d-f61c-4a63-a7bd-35c20f5c04af
+# utility method for recursion issue with DataGenerationProcess constructor and 
+# generate_next! function
 function make(::Type{ <: DataGenerationProcess }, angle::Float64, npoints, snoise, onoise)
 	object = DataGenerationProcess(angle, npoints, snoise, onoise)
 	for i in 1:npoints-1
@@ -503,43 +611,56 @@ stream = timer(100, Int(10 * round(100 / speed))) |>
 # ╔═╡ 0f2b1375-fe83-47b9-b23d-a6051b6175ce
 filtering_data_stream = stream |> map(Any, d -> d[2][end])
 
+# ╔═╡ f3c67020-ee41-4e2d-92db-3c1c62425dca
+inferred_stream = inference_filtering(filtering_data_stream, A, P, Q)
+
 # ╔═╡ 5a4a85d1-bfa9-4451-84e7-835d2e9c610e
-function generate_static(pendulum::DataGenerationProcess, npoints::Int; rng = nothing)
+function generate_static(process::DataGenerationProcess, npoints::Int; seed = nothing)
 	
-	rng = rng === nothing ? Random.GLOBAL_RNG : MersenneTwister(rng)
+	rng = seed === nothing ? Random.GLOBAL_RNG : MersenneTwister(seed)
 	
-	initial_state       = Point2f0(1.0, 0.0)
-	initial_observation = rand(rng, MvNormal(initial_state, pendulum.observation_noise))
+	init_state       = Point2f0(1.0, 0.0)
+	init_observation = rand(rng, MvNormal(init_state, process.observation_noise))
 	
 	x_k = Vector{Point2f0}(undef, npoints)
 	y_k = Vector{Point2f0}(undef, npoints)
 	
-	x_k[1] = initial_state
-	y_k[1] = initial_observation
+	x_k[1] = init_state
+	y_k[1] = init_observation
 	
 	for i in 2:npoints
-		tmp = pendulum.state_transition_matrix * x_k[i - 1]
-		x_k[i] = rand(rng, MvNormal(tmp, pendulum.state_transition_noise))
-		y_k[i] = rand(rng, MvNormal(x_k[i], pendulum.observation_noise))
+		tmp = process.state_transition_matrix * x_k[i - 1]
+		x_k[i] = rand(rng, MvNormal(tmp, process.state_transition_noise))
+		y_k[i] = rand(rng, MvNormal(x_k[i], process.observation_noise))
 	end
 	
 	return x_k, y_k
 end
 
-# ╔═╡ a3fdf5ea-a1db-45f8-8e61-bdbdba083fd3
-begin 
-	local rng = smoothing_seed
-	local npoints = smoothing_npoints
-	local P = smoothing_state_transition_noise
-	local Q = smoothing_observations_noise
-	local process = DataGenerationProcess(smoothing_angle, npoints, P, Q)
+# ╔═╡ 20442224-6b3e-4def-8921-05178156fa4f
+begin
+	local seed = filtering_seed
+	local npoints = filtering_npoints
+	local P = filtering_state_transition_noise
+	local Q = fittering_observations_noise
+	local process = DataGenerationProcess(filtering_angle, npoints, P, Q)
 	local A = process.state_transition_matrix
-	local x, y  = generate_static(process, npoints; rng = rng)
+	local x, y  = generate_static(process, npoints; seed = seed)
+	local data_stream = from(y)
 	
-	marginals = inference_smoothing(y, A, P, Q)
+	local xmarginal_stream = inference_filtering(
+		data_stream, A, P, Q
+	)
+	
+	local xkeep = keep(Marginal)
+	local subscription = subscribe!(xmarginal_stream, xkeep)
+	
+	unsubscribe!(subscription)
+	
+	local marginals = getvalues(xkeep)
 	
 	local range = 1:npoints
-	local dim   = (d) -> (a) -> map(e -> e[d...], a[range])
+	local dim   = (d) -> (a) -> map(e -> e[d...], a)
 	
 	local p1 = Plots.plot()
 	local p2 = Plots.plot()
@@ -555,6 +676,46 @@ begin
 	p2 = Plots.plot!(p2, x |> dim(2), label = "States")
 	p2 = Plots.plot!(p2, 
 		mean.(marginals) |> dim(2), ribbon = std.(marginals) |> dim((2, 2)),
+		label = "Estimates"
+	)
+	
+	Plots.plot(p1, p2, layout = Plots.@layout([ a; b ]), size = (800, 600))
+end
+
+# ╔═╡ b78366c9-4fcd-4b3b-a9c3-4d7f6ee9d8c0
+begin 
+	local seed = smoothing_seed
+	local npoints = smoothing_npoints
+	local P = smoothing_state_transition_noise
+	local Q = smoothing_observations_noise
+	local process = DataGenerationProcess(smoothing_angle, npoints, P, Q)
+	local A = process.state_transition_matrix
+	
+	smoothing_x, smoothing_y  = generate_static(process, npoints; seed = seed)
+	smoothing_marginals = inference_smoothing(smoothing_y, A, P, Q)
+end;
+
+# ╔═╡ a3fdf5ea-a1db-45f8-8e61-bdbdba083fd3
+begin 
+	local range = smoothing_plot_range
+	local dim   = (d) -> (a) -> map(e -> e[d...], a[range])
+	
+	local p1 = Plots.plot()
+	local p2 = Plots.plot()
+	
+	p1 = Plots.scatter!(p1, smoothing_y |> dim(1), ms = 2, label = "Observations")
+	p1 = Plots.plot!(p1, smoothing_x |> dim(1), label = "States")
+	p1 = Plots.plot!(p1, 
+		mean.(smoothing_marginals) |> dim(1), 
+		ribbon = std.(smoothing_marginals) |> dim((1, 1)),
+		label = "Estimates"
+	)
+	
+	p2 = Plots.scatter!(p2, smoothing_y |> dim(2), ms = 2, label = "Observations")
+	p2 = Plots.plot!(p2, smoothing_x |> dim(2), label = "States")
+	p2 = Plots.plot!(p2, 
+		mean.(smoothing_marginals) |> dim(2), 
+		ribbon = std.(smoothing_marginals) |> dim((2, 2)),
 		label = "Estimates"
 	)
 	
@@ -596,218 +757,6 @@ end
 	data_generation_subscription[] = subscribe!(stream, data_generation_callback)	
 end
 
-# ╔═╡ b48116bf-8963-425c-9ca3-5c2426b322a2
-md"""
-## Rocket.jl Utilities
-"""
-
-# ╔═╡ 157e211e-6e41-4429-b506-5f66c64a3fa2
-md"""
-Here we have some extra operators for Rocket.jl library
-"""
-
-# ╔═╡ e2659c7b-ae5e-4ad4-bcf2-35bec172e13f
-md"""
-`tap_on_subscribe_after` operator forces observable to call a `tapFn` right after subscription.
-"""
-
-# ╔═╡ 2ed4643f-c9c6-4a8c-ac2e-7795365a22dd
-begin
-	tap_on_subscribe_after(tapFn::F) where { F <: Function } = TapOnSubscribeAfterOperator{F}(tapFn)
-	
-	struct TapOnSubscribeAfterOperator{F} <: InferableOperator
-	    tapFn :: F
-	end
-	
-	Rocket.operator_right(operator::TapOnSubscribeAfterOperator, ::Type{L}) where L = L
-	
-	function Rocket.on_call!(::Type{L}, ::Type{L}, operator::TapOnSubscribeAfterOperator{F}, source) where { L, F }
-	    return Rocket.proxy(L, source, TapOnSubscribeAfterProxy{F}(operator.tapFn))
-	end
-	
-	struct TapOnSubscribeAfterProxy{F} <: SourceProxy
-	    tapFn :: F
-	end
-	
-	Rocket.source_proxy!(::Type{L}, proxy::TapOnSubscribeAfterProxy{F}, source::S) where { L, S, F } = TapOnSubscribeSourceAfter{L, S, F}(proxy.tapFn, source)
-	
-	struct TapOnSubscribeSourceAfter{L, S, F} <: Subscribable{L}
-	    tapFn  :: F
-	    source :: S
-	end
-	
-	function Rocket.on_subscribe!(source::TapOnSubscribeSourceAfter, actor)
-		subscription = subscribe!(source.source, actor)
-		source.tapFn()
-		return subscription
-	end
-	
-	Base.show(io::IO, ::TapOnSubscribeAfterOperator) = print(io, "TapOnSubscribeAfterOperator()")
-	Base.show(io::IO, ::TapOnSubscribeAfterProxy) = print(io, "TapOnSubscribeAfterProxy()")
-	Base.show(io::IO, ::TapOnSubscribeSourceAfter{L}) where L = print(io, "TapOnSubscribeSourceAfter($L)")
-end
-
-# ╔═╡ 469035f5-4c44-484c-9516-326e5061216f
-md"""
-`tap_on_unsubscribe` operator forces observable to call a `tapFn` right before unsubscription.
-"""
-
-# ╔═╡ 90138c8d-d6ba-4e70-8941-72f085c8de63
-begin
-	tap_on_unsubscribe(tapFn::F) where { F <: Function } = TapOnUnsubscribeOperator{F}(tapFn)
-	
-	struct TapOnUnsubscribeOperator{F} <: InferableOperator
-	    tapFn :: F
-	end
-	
-	Rocket.operator_right(operator::TapOnUnsubscribeOperator, ::Type{L}) where L = L
-	
-	function Rocket.on_call!(::Type{L}, ::Type{L}, operator::TapOnUnsubscribeOperator{F}, source) where { L, F }
-	    return Rocket.proxy(L, source, TapOnUnsubscribeProxy{F}(operator.tapFn))
-	end
-	
-	struct TapOnUnsubscribeProxy{F} <: SourceProxy
-	    tapFn :: F
-	end
-	
-	Rocket.source_proxy!(::Type{L}, proxy::TapOnUnsubscribeProxy{F}, source::S) where { L, S, F } = TapOnUnsubscribeSource{L, S, F}(proxy.tapFn, source)
-	
-	struct TapOnUnsubscribeSource{L, S, F} <: Subscribable{L}
-	    tapFn  :: F
-	    source :: S
-	end
-	
-	struct TapOnUnsubscribeSubscription{S, F} <: Teardown
-		tapFn        :: F
-		subscription :: S
-	end
-	
-	Rocket.as_teardown(::Type{ <: TapOnUnsubscribeSubscription }) = Rocket.UnsubscribableTeardownLogic()
-	
-	function Rocket.on_unsubscribe!(subscription::TapOnUnsubscribeSubscription)
-		subscription.tapFn()
-		return unsubscribe!(subscription.subscription)
-	end
-	
-	function Rocket.on_subscribe!(source::TapOnUnsubscribeSource, actor)
-	    return TapOnUnsubscribeSubscription(source.tapFn, subscribe!(source.source, actor))
-	end
-	
-	Base.show(io::IO, ::TapOnUnsubscribeOperator) = print(io, "TapOnUnsubscribeOperator()")
-	Base.show(io::IO, ::TapOnUnsubscribeProxy) = print(io, "TapOnUnsubscribeProxy()")
-	Base.show(io::IO, ::TapOnUnsubscribeSource{L}) where L = print(io, "TapOnUnsubscribeSource($L)")
-	Base.show(io::IO, ::TapOnUnsubscribeSubscription) = print(io, "TapOnUnsubscribeSubscription()")
-end
-
-# ╔═╡ c4cc673c-4d44-44df-89b0-68744d473a15
-# ReactiveMP.jl does not export any default inference procedure like 
-# other PPL libraries do. Instead user is free to implement their own 
-# inference tasks. In this example we create an inference procedure which 
-# is compatible both with reactive infinite real-time data streams and with 
-# static datasets
-function inference_filtering(data_stream, A, P, Q)
-	
-	# First we create our model 
-	# `@model` generated function returns `model` reference 
-	# and the same output in `return` statement as a second argument
-	model, (x_prev_mean, x_prev_cov, x, y) = one_time_step_graph(A, P, Q)
-	
-	# These are helper references for later usage in callbacks
-	data_subscription  = Ref{Teardown}(voidTeardown)
-	prior_subscription = Ref{Teardown}(voidTeardown)
-	
-	# `getmarginal` function return an observable of posterior marginals
-	x_posterior_marginals_observable = getmarginal(x)
-	
-	# This function will be called when someone subscribes on a stream 
-	# of posterior marginals
-	start_callback = () -> begin
-		
-		# At the very beginning we use `update!` function 
-		# to pass our initial prior 
-		ReactiveMP.update!(x_prev_mean, [ 0.0, 0.0 ])
-		ReactiveMP.update!(x_prev_cov, [ 100.0 0.0; 0.0 100.0 ])
-		
-		# Here we create an inifnite reaction loop 
-		# As soon as new posterior marginal is available we redirect 
-		# it as our new prior for previous time step to continue 
-		# with the next time step
-		prior_subscription[] = subscribe!(getmarginal(x), (mx) -> begin
-				
-			μ, Σ = mean_cov(mx)
-				
-			ReactiveMP.update!(x_prev_mean, μ)
-			ReactiveMP.update!(x_prev_cov, Σ)	
-				
-		end)
-		
-		# We subscribe on a data stream and redirect all data 
-		# to the observations `datavar` input
-		data_subscription[] = subscribe!(data_stream, (d) -> begin 
-			ReactiveMP.update!(y, convert(Vector{Float64}, d))
-		end)
-	end
-	
-	# This function will be called when someone unsubscribes from a stream 
-	# of posterior marginals
-	stop_callback = () -> begin
-		unsubscribe!(data_subscription[])
-		unsubscribe!(prior_subscription[])
-	end
-	
-	return x_posterior_marginals_observable |> 
-		tap_on_subscribe_after(start_callback) |> 
-		tap_on_unsubscribe(stop_callback)
-end
-
-# ╔═╡ 20442224-6b3e-4def-8921-05178156fa4f
-begin
-	local rng = filtering_seed
-	local npoints = filtering_npoints
-	local P = filtering_state_transition_noise
-	local Q = fittering_observations_noise
-	local process = DataGenerationProcess(filtering_angle, npoints, P, Q)
-	local A = process.state_transition_matrix
-	local x, y  = generate_static(process, npoints; rng = rng)
-	local data_stream = from(y)
-	
-	local xmarginal_stream = inference_filtering(
-		data_stream, A, P, Q
-	)
-	
-	local xkeep = keep(Marginal)
-	local subscription = subscribe!(xmarginal_stream, xkeep)
-	
-	unsubscribe!(subscription)
-	
-	local marginals = getvalues(xkeep)
-	
-	local range = 1:npoints
-	local dim   = (d) -> (a) -> map(e -> e[d...], a)
-	
-	local p1 = Plots.plot()
-	local p2 = Plots.plot()
-	
-	p1 = Plots.scatter!(p1, y |> dim(1), ms = 2, label = "Observations")
-	p1 = Plots.plot!(p1, x |> dim(1), label = "States")
-	p1 = Plots.plot!(p1, 
-		mean.(marginals) |> dim(1), ribbon = std.(marginals) |> dim((1, 1)),
-		label = "Estimates"
-	)
-	
-	p2 = Plots.scatter!(p2, y |> dim(2), ms = 2, label = "Observations")
-	p2 = Plots.plot!(p2, x |> dim(2), label = "States")
-	p2 = Plots.plot!(p2, 
-		mean.(marginals) |> dim(2), ribbon = std.(marginals) |> dim((2, 2)),
-		label = "Estimates"
-	)
-	
-	Plots.plot(p1, p2, layout = Plots.@layout([ a; b ]), size = (800, 600))
-end
-
-# ╔═╡ f3c67020-ee41-4e2d-92db-3c1c62425dca
-inferred_stream = inference_filtering(filtering_data_stream, A, P, Q)
-
 # ╔═╡ d92dcc1b-4374-44ec-81b0-3fb74b4a9807
 @guard_subscription if is_inference_subscribed
 	inference_subscription[] = subscribe!(inferred_stream, inference_callback)
@@ -837,11 +786,11 @@ end
 # ╠═61f29db3-6deb-47ca-8473-f9ead5d9d2f0
 # ╠═b7ae53d3-526f-44fa-91df-88d0a7b59d9b
 # ╟─1b31dfed-7bbf-4c12-a70c-a3dbb7854d9d
+# ╠═736867b0-d0b6-41b9-b4cc-b0de734714fa
 # ╠═ab1148c0-16bf-4f14-874a-b06878c8e538
 # ╠═2e3b739c-de1a-46ed-93cd-cdb3dda8c7b2
 # ╠═0f2b1375-fe83-47b9-b23d-a6051b6175ce
 # ╠═f3c67020-ee41-4e2d-92db-3c1c62425dca
-# ╠═736867b0-d0b6-41b9-b4cc-b0de734714fa
 # ╟─f670169a-72d9-4e55-b8ce-a6db4baec53b
 # ╟─aa7b11f4-6a37-4c70-9fdf-174d9e1e2c3a
 # ╠═d92dcc1b-4374-44ec-81b0-3fb74b4a9807
@@ -849,12 +798,17 @@ end
 # ╟─a83a421f-0ffb-452d-a112-178b4c7b4ebd
 # ╟─0033f1f2-c84b-47d5-8a58-1f57822c9a25
 # ╟─8b2113ff-6ade-40b5-87e9-3a62614e2a72
+# ╟─261ca703-871a-4252-a056-157e7c48ae1c
 # ╟─54043ff7-05f2-48ef-89f4-050379eba3f9
 # ╟─a814a9fe-6c76-4e75-9b0d-7141e18d1f9d
 # ╟─ea8f35f0-08da-4dee-bab5-69dd81e8ab3b
 # ╠═a327b4f6-b8b9-4536-b45d-c13b767a3606
 # ╠═65894eb0-99a6-4d29-a23d-bbe1dab4a2e8
 # ╠═621bebd0-492e-49fc-a58a-ecaee47286f6
+# ╟─b78366c9-4fcd-4b3b-a9c3-4d7f6ee9d8c0
+# ╟─0e2ca93e-f34b-4255-9b3b-f96b22bbad6a
+# ╟─ba7e8055-a4e6-4f6f-afe0-51192091f2f6
+# ╟─3036773b-0ccf-4bc2-9275-feca31252c71
 # ╟─a3fdf5ea-a1db-45f8-8e61-bdbdba083fd3
 # ╟─39b43b20-915b-44a6-947e-170234eae68a
 # ╟─e59d6d36-d576-4b2d-a66b-a03e780afc9c
@@ -866,9 +820,3 @@ end
 # ╟─1996542b-c7aa-4bfe-ab60-9359407c8ad5
 # ╟─e4cfe8a2-fdd6-4c2c-acc9-8da715afbc8f
 # ╠═b226adcc-e696-4336-8a6c-314295c59be3
-# ╟─b48116bf-8963-425c-9ca3-5c2426b322a2
-# ╟─157e211e-6e41-4429-b506-5f66c64a3fa2
-# ╟─e2659c7b-ae5e-4ad4-bcf2-35bec172e13f
-# ╠═2ed4643f-c9c6-4a8c-ac2e-7795365a22dd
-# ╟─469035f5-4c44-484c-9516-326e5061216f
-# ╠═90138c8d-d6ba-4e70-8941-72f085c8de63
