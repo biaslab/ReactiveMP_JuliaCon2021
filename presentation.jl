@@ -253,7 +253,7 @@ Select 'Connect observations' to connect observations points with a line.
 
 # ╔═╡ 261ca703-871a-4252-a056-157e7c48ae1c
 md"""
-Note: first selection may lag a little bit due to plotting compilation
+Note: first selection may lag a little bit due to plotting compilation, also it is better to wait until all cells have been initialised
 """
 
 # ╔═╡ 54043ff7-05f2-48ef-89f4-050379eba3f9
