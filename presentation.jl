@@ -24,6 +24,7 @@ begin
 	using Rocket, GraphPPL, ReactiveMP
 	using Random
 	using Colors
+	using Images
 	
 	import Plots
 end
@@ -40,9 +41,85 @@ begin
 	WGLMakie.set_theme!(resolution = (1350, 800))
 end
 
+# ╔═╡ fa08d3fc-ce86-49dd-9002-f8f698808295
+md"""
+## Data 
+"""
+
+# ╔═╡ 526852f9-f828-4f95-9241-661440c77767
+md"""
+First lets check how our dataset looks like
+"""
+
+# ╔═╡ 2dc6fb73-cd92-4b2a-a6ad-542092526ab0
+# Parameters for test static dataset
+begin 
+	# Seed for reproducability
+	test_data_seed    = 123
+	
+	# Number of observations in static dataset
+	test_data_npoints = 200
+	
+	# Angle change rate
+	test_data_angle = π / 20
+	
+	# State transition noise
+	test_data_state_transition_noise = [ 0.8 0.0; 0.0 0.8 ]
+	
+	# Observations noise
+	test_data_observations_noise     = [ 200.0 0.0; 0.0 200.0 ]
+end;
+
+# ╔═╡ df9e5c18-8e1a-4f60-95db-6e84e8536ac7
+md"""
+Imagine we have a dataset of a moving object. We don't have a direct access to the states of a moving object, but only to noisy observations.
+"""
+
+# ╔═╡ 507c3c46-cf6c-4a19-a3e4-e852eae6321a
+md"""
+#### Linear Multivariate Gaussian State-space Model
+
+For this model we may try to use Linear Multivariate Gaussian State Space model.
+The goal is to perform both Kalman filtering and smoothing algorithms to estimate hidden states of our system.
+
+The model can be described with the following equations:
+
+```math
+\begin{equation}
+  \begin{aligned}
+    p(\mathbf{x}_k|\mathbf{x}_{k - 1}) & = \, \mathcal{N}(\mathbf{x}_k|\mathbf{A}\mathbf{x}_{k - 1}, \mathcal{P}) \\
+    p(\mathbf{y}_k|\mathbf{x}_k) & = \, \mathcal{N}(\mathbf{y}_k|\mathbf{x}_{k}, \mathcal{Q}) \\
+  \end{aligned}
+\end{equation}
+```
+
+In this model, we denote by $\mathbf{x}_k$ the current state of the system (at time step $k$), by $\mathbf{x}_{k - 1}$ the previous state at time $k-1$, $\mathbf{A}$ is a constant system input and $\mathbf{y}_k$ is a noisy observation of $\mathbf{x}_k$. We further assume that the states and the observations are corrupted by i.i.d. Gaussian noise with covariance matrices $\mathcal{P}$ and $\mathcal{Q}$ respectively.
+
+The SSM can be represented by the following factor graph, where the pictured section is chained over time:
+
+$(load("./figs/ffg_png.png"))
+
+Usually this type of model is used for a linear differential equations where the measured quantities were linear functions of the state. For example this can be the dynamics of the car or noisy pendulum model [Bayesian Filtering and Smoothing, Särkkä, Simo, p.~44].
+"""
+
 # ╔═╡ 1eedb961-877d-4481-9441-b7b04c0cd361
 md"""
 ## Filtering model
+"""
+
+# ╔═╡ f7169a26-25ec-453d-a3c8-068048e7d83d
+md"""
+
+```math
+\begin{equation}
+  \begin{aligned}
+    p(\mathbf{x}_{\mathrm{prev}}) & = \, \mathcal{N}(\mathbf{x}_{\mathrm{prev}}|\mathbf{μ}_{\mathrm{prev}}, \mathbf{\Sigma}_{\mathrm{prev}}) \\
+    p(\mathbf{x}|\mathbf{x}_{\mathrm{prev}}) & = \, \mathcal{N}(\mathbf{x}|\mathbf{A}\mathbf{x}_{\mathrm{prev}}, \mathcal{P}) \\
+    p(\mathbf{y}|\mathbf{x}) & = \, \mathcal{N}(\mathbf{y}|\mathbf{x}, \mathcal{Q}) \\
+  \end{aligned}
+\end{equation}
+```
+
 """
 
 # ╔═╡ b8caf0eb-aad9-4506-823c-b7ecc23caf7c
@@ -258,7 +335,7 @@ Note: first selection may lag a little bit due to plotting compilation, also it 
 
 # ╔═╡ 54043ff7-05f2-48ef-89f4-050379eba3f9
 begin
-	local f = Figure()
+	local f = WGLMakie.Figure()
 	
 	on(events(f).mousebutton) do event
 		return true
@@ -286,7 +363,7 @@ begin
 	)
 	limits!(-50, 50, -50, 50)
 	
-	axis11 = Axis(f[1, 1])
+	axis11 = WGLMakie.Axis(f[1, 1])
 	axis11.ylabel = "y-position" 
 	axis11.xlabel = "x-position" 
 	
@@ -317,7 +394,7 @@ begin
 	end
 	limits!(0, npoints, -50, 50)
 	
-	axis1211 = Axis(f[1, 2][1, 1])
+	axis1211 = WGLMakie.Axis(f[1, 2][1, 1])
 	axis1211.ylabel = "x-position" 
 	axis1211.xlabel = "Time step" 
 	
@@ -333,7 +410,7 @@ begin
 	end
 	limits!(0, npoints, -50, 50)
 	
-	axis1211 = Axis(f[1, 2][2, 1])
+	axis1211 = WGLMakie.Axis(f[1, 2][2, 1])
 	axis1211.ylabel = "y-position" 
 	axis1211.xlabel = "Time step" 
 	
@@ -350,6 +427,20 @@ md"""
 ReactiveMP.jl is flexible enough to run inference on full-graph with a static datasets. In this example we show smoothing algorithm with a sum-product by message passing.
 """
 
+# ╔═╡ 224f8617-12e9-4c08-ae9e-c4dd283b018a
+md"""
+
+```math
+\begin{equation}
+  \begin{aligned}
+    p(\mathbf{x}_k|\mathbf{x}_{k - 1}) & = \, \mathcal{N}(\mathbf{x}_k|\mathbf{A}\mathbf{x}_{k - 1}, \mathcal{P}) \\
+    p(\mathbf{y}_k|\mathbf{x}_k) & = \, \mathcal{N}(\mathbf{y}_k|\mathbf{x}_{k}, \mathcal{Q}) \\
+  \end{aligned}
+\end{equation}
+```
+
+"""
+
 # ╔═╡ a327b4f6-b8b9-4536-b45d-c13b767a3606
 # Here we create a full graph 
 @model function full_graph(npoints, A, P, Q)
@@ -358,7 +449,7 @@ ReactiveMP.jl is flexible enough to run inference on full-graph with a static da
 	y = datavar(Vector{Float64}, npoints) # A sequence of data inputs
 	
 	# `constvar` creates a constant reference for constants in a model
-	# (unnecessary for actual inference, but only for better performance)
+	# (unnecessary for actual inference, but for better performance only)
 	cA = constvar(A)
 	cP = constvar(P)
 	cQ = constvar(Q)
@@ -415,7 +506,7 @@ begin
 	smoothing_seed    = 43
 	
 	# Number of observations in static dataset
-	smoothing_npoints = 10000
+	smoothing_npoints = 500
 	
 	# Angle change rate
 	smoothing_angle = π / 100
@@ -637,6 +728,65 @@ function generate_static(process::DataGenerationProcess, npoints::Int; seed = no
 	return x_k, y_k
 end
 
+# ╔═╡ 48ca6f5a-33c2-4118-a72d-71e59c7a2b22
+begin
+	test_data_generator = make(DataGenerationProcess, 
+		test_data_angle, test_data_npoints, 
+		test_data_state_transition_noise, test_data_observations_noise
+	)
+	
+	test_dataset = generate_static(
+		test_data_generator, test_data_npoints, seed = test_data_seed
+	)
+end;
+
+# ╔═╡ f4baf021-1eca-4677-916c-62036c2984c7
+begin
+	local npoints = test_data_npoints 
+	local test_data_generator = make(DataGenerationProcess, 
+		test_data_angle, test_data_npoints, 
+		test_data_state_transition_noise, test_data_observations_noise
+	)
+	
+	local test_dataset = generate_static(
+		test_data_generator, test_data_npoints, seed = test_data_seed
+	)
+	
+	local sizes  = abs2.(range(1, 1.7, length=npoints))
+	local alphas = abs2.(range(0.5, 1.0, length=npoints))
+	local colors_data = Plots.palette([:blue, :green], npoints)
+	local x, y = test_dataset
+	
+	local dim   = (d) -> (a) -> map(e -> e[d...], a)
+	
+	local p = Plots.plot(xlimit = (-25, 25), ylimit = (-25, 25))
+	local p1 = Plots.plot()
+	local p2 = Plots.plot()
+	
+	p = Plots.scatter!(p, y, 
+		color = colors_data, ms = sizes, alpha = alphas, label = false,
+	)
+	p = Plots.plot!(p, x, color = :teal)
+	
+	p1 = Plots.scatter!(p1, y |> dim(1),
+		alpha = alphas,
+		ms = sizes, c = colors_data,
+		label = false,
+		xaxis = "Time step",
+		yaxis = "x"
+	)
+	
+	p2 = Plots.scatter!(p2, y |> dim(2), 
+		alpha = alphas,
+		ms = sizes, c = colors_data,
+		label = false,
+		xaxis = "Time step",
+		yaxis = "y"
+	)
+
+	Plots.plot(p, p1, p2, layout = Plots.@layout([ a [ b; c ] ]), size = (800, 400))
+end
+
 # ╔═╡ 20442224-6b3e-4def-8921-05178156fa4f
 begin
 	local seed = filtering_seed
@@ -762,11 +912,22 @@ end
 	inference_subscription[] = subscribe!(inferred_stream, inference_callback)
 end
 
+# ╔═╡ ce16ce1a-0933-4899-abba-52102c720f3a
+
+
 # ╔═╡ Cell order:
 # ╠═773890b4-f844-4a2b-946b-b56f7f6ac375
 # ╠═3f028a44-cdd0-11eb-2fb0-6b696babeb9b
 # ╠═bdf461c7-918d-4f78-968d-aa3dfd11d3b0
+# ╟─fa08d3fc-ce86-49dd-9002-f8f698808295
+# ╟─526852f9-f828-4f95-9241-661440c77767
+# ╠═2dc6fb73-cd92-4b2a-a6ad-542092526ab0
+# ╟─48ca6f5a-33c2-4118-a72d-71e59c7a2b22
+# ╟─df9e5c18-8e1a-4f60-95db-6e84e8536ac7
+# ╟─f4baf021-1eca-4677-916c-62036c2984c7
+# ╟─507c3c46-cf6c-4a19-a3e4-e852eae6321a
 # ╟─1eedb961-877d-4481-9441-b7b04c0cd361
+# ╟─f7169a26-25ec-453d-a3c8-068048e7d83d
 # ╠═b8caf0eb-aad9-4506-823c-b7ecc23caf7c
 # ╠═c4cc673c-4d44-44df-89b0-68744d473a15
 # ╠═36344f8d-1fbb-4b54-b17e-46edcebb6c7d
@@ -802,6 +963,7 @@ end
 # ╟─54043ff7-05f2-48ef-89f4-050379eba3f9
 # ╟─a814a9fe-6c76-4e75-9b0d-7141e18d1f9d
 # ╟─ea8f35f0-08da-4dee-bab5-69dd81e8ab3b
+# ╟─224f8617-12e9-4c08-ae9e-c4dd283b018a
 # ╠═a327b4f6-b8b9-4536-b45d-c13b767a3606
 # ╠═65894eb0-99a6-4d29-a23d-bbe1dab4a2e8
 # ╠═621bebd0-492e-49fc-a58a-ecaee47286f6
@@ -820,3 +982,4 @@ end
 # ╟─1996542b-c7aa-4bfe-ab60-9359407c8ad5
 # ╟─e4cfe8a2-fdd6-4c2c-acc9-8da715afbc8f
 # ╠═b226adcc-e696-4336-8a6c-314295c59be3
+# ╠═ce16ce1a-0933-4899-abba-52102c720f3a
