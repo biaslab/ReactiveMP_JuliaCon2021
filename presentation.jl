@@ -46,11 +46,6 @@ md"""
 ## Data 
 """
 
-# ╔═╡ 526852f9-f828-4f95-9241-661440c77767
-md"""
-First lets check how our dataset looks like
-"""
-
 # ╔═╡ 2dc6fb73-cd92-4b2a-a6ad-542092526ab0
 # Parameters for test static dataset
 begin 
@@ -64,7 +59,7 @@ begin
 	test_data_angle = π / 20
 	
 	# State transition noise
-	test_data_state_transition_noise = [ 0.8 0.0; 0.0 0.8 ]
+	test_data_state_transition_noise = [ 1.0 0.0; 0.0 1.0 ]
 	
 	# Observations noise
 	test_data_observations_noise     = [ 200.0 0.0; 0.0 200.0 ]
@@ -72,7 +67,7 @@ end;
 
 # ╔═╡ df9e5c18-8e1a-4f60-95db-6e84e8536ac7
 md"""
-Imagine we have a dataset of a moving object. We don't have a direct access to the states of a moving object, but only to noisy observations.
+Imagine we have a dataset with a trajectory of a moving object. We don't have a direct access to the states of a moving object, but only to noisy observations.
 """
 
 # ╔═╡ 507c3c46-cf6c-4a19-a3e4-e852eae6321a
@@ -288,10 +283,10 @@ begin
 	A = [ cos(angle) -sin(angle); sin(angle) cos(angle) ]
 	
 	# State transition noise
-	P = [ 0.1 0.0; 0.0 0.1 ]
+	P = [ 0.5 0.0; 0.0 0.5 ]
 	
 	# Observations noise
-	Q = [ 200.0 0.0; 0.0 200.0 ]
+	Q = [ 1000.0 0.0; 0.0 1000.0 ]
 end;
 
 # ╔═╡ 65125537-9ee9-4b2d-92be-45ee1a914b24
@@ -503,10 +498,10 @@ end
 # smoothing by message passing
 begin 
 	# Seed for reproducability
-	smoothing_seed    = 43
+	smoothing_seed    = Int(round(1000 * rand()))
 	
 	# Number of observations in static dataset
-	smoothing_npoints = 500
+	smoothing_npoints = 1_000
 	
 	# Angle change rate
 	smoothing_angle = π / 100
@@ -766,7 +761,7 @@ begin
 	p = Plots.scatter!(p, y, 
 		color = colors_data, ms = sizes, alpha = alphas, label = false,
 	)
-	p = Plots.plot!(p, x, color = :teal)
+	p = Plots.plot!(p, x, color = :teal, label = "Trajectory")
 	
 	p1 = Plots.scatter!(p1, y |> dim(1),
 		alpha = alphas,
@@ -920,7 +915,6 @@ end
 # ╠═3f028a44-cdd0-11eb-2fb0-6b696babeb9b
 # ╠═bdf461c7-918d-4f78-968d-aa3dfd11d3b0
 # ╟─fa08d3fc-ce86-49dd-9002-f8f698808295
-# ╟─526852f9-f828-4f95-9241-661440c77767
 # ╠═2dc6fb73-cd92-4b2a-a6ad-542092526ab0
 # ╟─48ca6f5a-33c2-4118-a72d-71e59c7a2b22
 # ╟─df9e5c18-8e1a-4f60-95db-6e84e8536ac7
@@ -929,8 +923,8 @@ end
 # ╟─1eedb961-877d-4481-9441-b7b04c0cd361
 # ╟─f7169a26-25ec-453d-a3c8-068048e7d83d
 # ╠═b8caf0eb-aad9-4506-823c-b7ecc23caf7c
-# ╠═c4cc673c-4d44-44df-89b0-68744d473a15
-# ╠═36344f8d-1fbb-4b54-b17e-46edcebb6c7d
+# ╟─c4cc673c-4d44-44df-89b0-68744d473a15
+# ╟─36344f8d-1fbb-4b54-b17e-46edcebb6c7d
 # ╟─20442224-6b3e-4def-8921-05178156fa4f
 # ╟─bc84b4d8-8916-4081-9d86-9322d8f4d200
 # ╟─bb1e524b-7cff-412a-8c05-d60a350f28b8
