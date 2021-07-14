@@ -47,7 +47,7 @@ md"""
 """
 
 # ╔═╡ 2dc6fb73-cd92-4b2a-a6ad-542092526ab0
-# Parameters for test static dataset
+# Testing parameters for static dataset
 begin 
 	# Seed for reproducability
 	test_data_seed    = 123
@@ -58,24 +58,25 @@ begin
 	# Angle change rate
 	test_data_angle = π / 20
 	
-	# State transition noise
+	# State transition noise covariance matrix
 	test_data_state_transition_noise = [ 1.0 0.0; 0.0 1.0 ]
 	
-	# Observations noise
+	# Observations noise covariance matrix
 	test_data_observations_noise     = [ 200.0 0.0; 0.0 200.0 ]
 end;
 
 # ╔═╡ df9e5c18-8e1a-4f60-95db-6e84e8536ac7
 md"""
-Imagine we have a dataset with a trajectory of a moving object. We don't have a direct access to the states of a moving object, but only to noisy observations.
+Imagine that we have a dataset containing the trajectory of a moving object. We do not have direct access to the true location of the moving object (the hidden state), but only to noisy measurements of its location (the observations).
 """
 
 # ╔═╡ 507c3c46-cf6c-4a19-a3e4-e852eae6321a
 md"""
 #### Linear Multivariate Gaussian State-space Model
 
-For this model we may try to use Linear Multivariate Gaussian State Space model.
-The goal is to perform both Kalman filtering and smoothing algorithms to estimate hidden states of our system.
+We wish to estimate the true location of the moving object by only observing noisy measurements.
+For this problem we may try to use a Linear Multivariate Gaussian State Space model (LMGSSM).
+In this model we can perform both Kalman filtering and smoothing to estimate the hidden states of our system.
 
 The model can be described with the following equations:
 
@@ -88,13 +89,13 @@ The model can be described with the following equations:
 \end{equation}
 ```
 
-In this model, we denote by $\mathbf{x}_k$ the current state of the system (at time step $k$), by $\mathbf{x}_{k - 1}$ the previous state at time $k-1$, $\mathbf{A}$ is a constant system input and $\mathbf{y}_k$ is a noisy observation of $\mathbf{x}_k$. We further assume that the states and the observations are corrupted by i.i.d. Gaussian noise with covariance matrices $\mathcal{P}$ and $\mathcal{Q}$ respectively.
+In this model, $\mathbf{x}_k$ denotes the current state of the system (the true location at time step $k$), $\mathbf{x}_{k - 1}$ denotes the previous state at time $k-1$, $\mathbf{A}$ is a constant system input and $\mathbf{y}_k$ is a noisy observation of $\mathbf{x}_k$. Furthermore we assume that the state transitions and the observations are corrupted by i.i.d. Gaussian noise with covariance matrices $\mathcal{P}$ and $\mathcal{Q}$, respectively.
 
-The SSM can be represented by the following factor graph, where the pictured section is chained over time:
+The state space model can be visually represented by the following factor graph, where the shown graph represents a section is the full model that is repeated for each time step:
 
 $(load("./figs/ffg_png.png"))
 
-Usually this type of model is used for a linear differential equations where the measured quantities were linear functions of the state. For example this can be the dynamics of the car or noisy pendulum model [Bayesian Filtering and Smoothing, Särkkä, Simo, p.~44].
+Usually this type of model is used for linear differential equations where the measured quantities are linear functions of the state variables. For example, this can be the dynamics of a car or a noisy pendulum model [Bayesian Filtering and Smoothing, Särkkä, Simo, p.~44].
 """
 
 # ╔═╡ 1eedb961-877d-4481-9441-b7b04c0cd361
@@ -118,67 +119,70 @@ md"""
 """
 
 # ╔═╡ b8caf0eb-aad9-4506-823c-b7ecc23caf7c
-# `@model` macro accepts just a regular Julia function
+# The `@model` macro accepts a regular Julia function.
 @model function one_time_step_graph(A, P, Q)
 	
-	# `datavar` creates a data input in the model
-	# later on during inference procedure we are allowed 
-	# to pass data in form of a delta distribution using 
-	# datavar references
+	# `datavar` creates a data input in the model.
+	# Later on during the inference procedure we are allowed 
+	# to pass data to our model by referencing the created
+	# `datavar` variables.
 	x_prev_mean = datavar(Vector{Float64})
 	x_prev_cov  = datavar(Matrix{Float64})
 	
-	# here `x_prev` is our prior knowledge about previous state of 
-	# in our model at time step k - 1 
-	# At k = 0 `x_prev` acts as an initial prior
+	# `x_prev` contains our prior knowledge about the previous state 
+	# in our model at time step k - 1.
+	# At k = 0, the variable `x_prev` acts as an initial prior on the
+	# hidden state.
 	x_prev ~ MvNormalMeanCovariance(x_prev_mean, x_prev_cov)
 	
-	# `x` is the current state at time step k
+	# `x` is the current hidden state at time step k
 	x ~ MvNormalMeanCovariance(A * x_prev, P)
 	
-	# `y` is an observation 
+	# `y` is an observation, which we will pass to the model during 
+	# the inference procedure. Furthermore we specify that we can
+	# model `y` from our hidden state `x`.
 	y = datavar(Vector{Float64})
 	
 	y ~ MvNormalMeanCovariance(x, Q)
 	
-	# We return all references for later usage
-	# during inference procedure
+	# We return all variable references for later usage
+	# during the inference procedure.
 	return x_prev_mean, x_prev_cov, x, y
 end
 
 # ╔═╡ c4cc673c-4d44-44df-89b0-68744d473a15
-# ReactiveMP.jl does not export any default inference procedure like 
-# other PPL libraries do. Instead user is free to implement their own 
-# inference tasks. In this example we create an inference procedure which 
-# is compatible both with reactive infinite real-time data streams and with 
-# static datasets
+# ReactiveMP.jl does not export any default inference procedures like 
+# other probabilistic programming libraries do. Instead the user is free to 
+# implement their own inference algorithms. In this example we create an 
+# inference procedure which is compatible with both reactive infinite 
+# real-time data streams and with static datasets.
 function inference_filtering(data_stream, A, P, Q)
 	
-	# First we create our model 
-	# `@model` generated function returns `model` reference 
-	# and the same output in `return` statement as a second argument
+	# First we create our model:
+	# The `@model` generated function returns a `model` reference 
+	# and the same output as in the `return` statement as a second argument.
 	model, (x_prev_mean, x_prev_cov, x, y) = one_time_step_graph(A, P, Q)
 	
 	# These are helper references for later usage in callbacks
 	data_subscription  = Ref{Teardown}(voidTeardown)
 	prior_subscription = Ref{Teardown}(voidTeardown)
 	
-	# `getmarginal` function return an observable of posterior marginals
+	# The `getmarginal()` function returns an observable of the posterior marginals.
 	x_posterior_marginals_observable = getmarginal(x)
 	
 	# This function will be called when someone subscribes on a stream 
-	# of posterior marginals
+	# of posterior marginals.
 	start_callback = () -> begin
 		
-		# At the very beginning we use `update!` function 
-		# to pass our initial prior 
+		# At the very beginning we use the `update!()` function 
+		# to pass our initial prior to the model.
 		ReactiveMP.update!(x_prev_mean, [ 0.0, 0.0 ])
 		ReactiveMP.update!(x_prev_cov, [ 100.0 0.0; 0.0 100.0 ])
 		
-		# Here we create an inifnite reaction loop 
-		# As soon as new posterior marginal is available we redirect 
-		# it as our new prior for previous time step to continue 
-		# with the next time step
+		# Here we create an infinite reaction loop.
+		# As soon as a new posterior marginal is available we set 
+		# it as our new prior for previous time step, such that we
+		# can continue processing the next time step.
 		prior_subscription[] = subscribe!(getmarginal(x), (mx) -> begin
 				
 			μ, Σ = mean_cov(mx)
@@ -188,15 +192,15 @@ function inference_filtering(data_stream, A, P, Q)
 				
 		end)
 		
-		# We subscribe on a data stream and redirect all data 
-		# to the observations `datavar` input
+		# We subscribe to a data stream and redirect all data 
+		# to the observations `datavar` input variable.
 		data_subscription[] = subscribe!(data_stream, (d) -> begin 
 			ReactiveMP.update!(y, convert(Vector{Float64}, d))
 		end)
 	end
 	
 	# This function will be called when someone unsubscribes from a stream 
-	# of posterior marginals
+	# of posterior marginals.
 	stop_callback = () -> begin
 		unsubscribe!(data_subscription[])
 		unsubscribe!(prior_subscription[])
@@ -208,8 +212,8 @@ function inference_filtering(data_stream, A, P, Q)
 end
 
 # ╔═╡ 36344f8d-1fbb-4b54-b17e-46edcebb6c7d
-# Parameters for static inference example for LGSSM and 
-# Kalman filter by message passing
+# Parameters for the static inference example for the LMGSSM 
+# and Kalman filter using message passing.
 begin 
 	# Seed for reproducability
 	filtering_seed    = 42
@@ -220,10 +224,10 @@ begin
 	# Angle change rate
 	filtering_angle = π / 100
 	
-	# State transition noise
+	# State transition noise covariance matrix
 	filtering_state_transition_noise = [ 1.0 0.0; 0.0 1.0 ]
 	
-	# Observations noise
+	# Observations noise covariance matrix
 	fittering_observations_noise     = [ 200.0 0.0; 0.0 200.0 ]
 end;
 
@@ -234,17 +238,17 @@ md"""
 
 # ╔═╡ bb1e524b-7cff-412a-8c05-d60a350f28b8
 md"""
-Here we create reactive nodes for our interactive plots. It is worth to note that we use `Makie.jl` plotting engine, which uses `Observables.jl` for reactivity. `ReactiveMP.jl` on the other hand uses `Rocket.jl` reactive framework for best performance and rich functionality.
+Here we create reactive nodes for our interactive plots. It is worth to note that we use the `Makie.jl` plotting engine, which uses `Observables.jl` for reactivity. `ReactiveMP.jl` on the other hand uses the `Rocket.jl` reactive framework for achieving best possible performance and whilst retaining rich functionality.
 """
 
 # ╔═╡ c135e271-10d3-4deb-abf2-6d5f65a6fc78
 md"""
-Here we create data generation check box and subscription reference.
+Here we create a data generation check box and subscription reference.
 """
 
 # ╔═╡ 5752f563-22ef-4e9e-a3d0-6630cc911248
 md"""
-To make plots look nicer we pass zeroed data on unsubscription to observables used for plotting
+To make the plots look nicer we pass zeroed data upon unsubscription to the observables that we use for plotting.
 """
 
 # ╔═╡ 6860f6cd-7507-455c-85e1-a89afea8890e
@@ -254,7 +258,7 @@ md"""
 
 # ╔═╡ f5fe83ad-3be9-4d2c-85ad-da7633d7367e
 md"""
-As our synthetic stream of data we create a timer observable, which emits a number after a prescpecified duration. This stream is infinite and never completes. We re-map it to our data generation process and call `generate_next!` function on each timer emission. We also use `share_replay` operator to share this stream of data between multiple listeners.
+As our synthetic data stream we create a timer observable, which emits a number after a prespecified duration. This stream is infinite and never completes. We re-map it to our data generation process and call the `generate_next!()` function on each timer emission. We also use the `share_replay` operator to share this stream of data between multiple listeners.
 """
 
 # ╔═╡ 1b31dfed-7bbf-4c12-a70c-a3dbb7854d9d
@@ -270,22 +274,23 @@ begin
 	# Note: interactive visualisation is a bit fragile with changing parameters while             visualising at the same time, it is better to deselect both check boxes               before 	changing anything	
 
 	# How many points are used for plotting
-	# Inference does not use this parameter since we do Kalman filtering
+	# The inference procedure does not depend on this parameter since 
+	# we perform Kalman filtering.
 	npoints = 150
 	
 	# Rate at which data points are generated, should be somewhere 
 	# between 10 and 100
 	speed = 50
 	
-	# Angle used in rotation matrix, specifies angle change rate
+	# Angle used in rotation matrix, specifies the angle change rate
 	angle = π / 70
 	
 	A = [ cos(angle) -sin(angle); sin(angle) cos(angle) ]
 	
-	# State transition noise
+	# State transition noise covariance matrix
 	P = [ 0.5 0.0; 0.0 0.5 ]
 	
-	# Observations noise
+	# Observations noise covariance matrix
 	Q = [ 1000.0 0.0; 0.0 1000.0 ]
 end;
 
@@ -316,16 +321,16 @@ end;
 
 # ╔═╡ 0033f1f2-c84b-47d5-8a58-1f57822c9a25
 md"""
-Select 'Show data' checkbox to subscribe on a real-time data generation process and visualise it on an interactive pane below.
+Select the 'Show data' checkbox to subscribe to a real-time data generation process and to visualise it on the interactive pane below.
 
-Select 'Run inference' checkbox to subscribe on the real-time inference procedure. Inference uses the same realtime data set for inference and state estimation.
+Select the 'Run inference' checkbox to subscribe to the real-time inference procedure. Inference uses the same real-time dataset for inference and state estimation.
 
-Select 'Connect observations' to connect observations points with a line.
+Select the 'Connect observations' to connect consecutive observations by a line.
 """
 
 # ╔═╡ 261ca703-871a-4252-a056-157e7c48ae1c
 md"""
-Note: first selection may lag a little bit due to plotting compilation, also it is better to wait until all cells have been initialised
+Note: the first selection may lag a little bit due to plotting compilation, also it is better to wait until all cells have been initialised.
 """
 
 # ╔═╡ 54043ff7-05f2-48ef-89f4-050379eba3f9
@@ -419,7 +424,7 @@ md"""
 
 # ╔═╡ ea8f35f0-08da-4dee-bab5-69dd81e8ab3b
 md"""
-ReactiveMP.jl is flexible enough to run inference on full-graph with a static datasets. In this example we show smoothing algorithm with a sum-product by message passing.
+ReactiveMP.jl is flexible enough to run inference on a full graph with a static datasets. In this example we show a Kalman smoothing algorithm using sum-product message passing.
 """
 
 # ╔═╡ 224f8617-12e9-4c08-ae9e-c4dd283b018a
@@ -444,12 +449,12 @@ md"""
 	y = datavar(Vector{Float64}, npoints) # A sequence of data inputs
 	
 	# `constvar` creates a constant reference for constants in a model
-	# (unnecessary for actual inference, but for better performance only)
+	# (unnecessary for the actual inference results, but necessary for better performance)
 	cA = constvar(A)
 	cP = constvar(P)
 	cQ = constvar(Q)
 	
-	# Our model specification resembles closely to the actual equations
+	# Our model specification closely resembles the data generating model.
 	x[1] ~ MvNormalMeanCovariance([ 0.0, 0.0 ], [ 100.0 0.0; 0.0 100.0 ])
 	y[1] ~ MvNormalMeanCovariance(x[1], cQ)
 	
@@ -464,11 +469,11 @@ end
 # ╔═╡ 65894eb0-99a6-4d29-a23d-bbe1dab4a2e8
 function inference_smoothing(data, A, P, Q)
 
-	# We assume static dataset here
+	# We assume to use a static dataset here:
 	data    = convert(AbstractVector{Vector{Float64}}, data)
 	npoints = length(data)
 	
-	# We use `limit_stack_depth` option for huge models with thousands of nodes
+	# We use the `limit_stack_depth` option for huge models with thousands of nodes.
 	model, (x, y) = full_graph(npoints, A, P, Q, options = (
 		limit_stack_depth = 500,
 	))
@@ -477,12 +482,12 @@ function inference_smoothing(data, A, P, Q)
 	xmarginals = getmarginals(x)
 	
 	# As soon as new marginals are available 
-	# we want to save them in the `xbuffer`
+	# we want to save them in the `xbuffer`.
 	subscription = subscribe!(xmarginals, xbuffer)
 	
-	# Because we assume a static dataset our workflow is easier then in a 
-	# reactive real-time filtering. We may just pass all data we have and wait 
-	# sycnrhonously for all posterior marginals to be updated
+	# Because we assume a static dataset, our workflow is easier then in a 
+	# reactive real-time filtering setup. We may just pass all the data and wait 
+	# synchronously for all posterior marginals to be updated.
 	ReactiveMP.update!(y, data)
 	
 	# It is a good practise to unsubscribe, 
@@ -494,8 +499,8 @@ function inference_smoothing(data, A, P, Q)
 end
 
 # ╔═╡ 621bebd0-492e-49fc-a58a-ecaee47286f6
-# Parameters for static inference example for LGSSM and 
-# smoothing by message passing
+# Parameters for the LMGSSM, where we perform Kalman smoothing through
+# message passing on a static dataset.
 begin 
 	# Seed for reproducability
 	smoothing_seed    = Int(round(1000 * rand()))
@@ -506,16 +511,16 @@ begin
 	# Angle change rate
 	smoothing_angle = π / 100
 	
-	# State transition noise
+	# State transition noise covariance matrix
 	smoothing_state_transition_noise = [ 1.0 0.0; 0.0 1.0 ]
 
-	# Observations noise
+	# Observations noise covariance matrix
 	smoothing_observations_noise     = [ 200.0 0.0; 0.0 200.0 ]
 end;
 
 # ╔═╡ 0e2ca93e-f34b-4255-9b3b-f96b22bbad6a
 md"""
-For a lot of points plotting becomes really slow, here are some sliders to show only part of the inferred states
+For a lot of points plotting can become really slow, here are some sliders to show only part of the inferred states:
 """
 
 # ╔═╡ ba7e8055-a4e6-4f6f-afe0-51192091f2f6
@@ -563,8 +568,8 @@ data_generation_callback = (data) -> begin
 	try
 		states, observations = data[1], data[2]
 		
-		# Every time we receive a new data from our stream 
-		# we just pass it to observable nodes used for plotting
+		# Every time we receive new data from our stream we
+		# just pass it to the observable nodes used for plotting.
 
 		if is_data_generation_subscribed
 			real_states[]  = states
@@ -599,9 +604,9 @@ end;
 inference_callback = (marginal) -> begin
 	try 
 		
-		# Every time a new posterio marginal is available
-		# we put in our circular buffer and pass new values 
-		# to Makie.jl visualisation backend to plot new values
+		# Every time a new posterior marginal is available
+		# we put it in our circular buffer and pass new values 
+		# to the Makie.jl visualisation backend to plot new values.
 		
 		push!(inferred_buffer, marginal)
 		
@@ -630,7 +635,7 @@ Connect observations? $(connect_noise_observations_check_box)
 
 # ╔═╡ e738bbf7-8a66-411c-82f9-9716f749f30b
 md"""
-`DataGenerationProcess` encapsulates simple data generation process with a rotation matrix as a state transition matrix. States modelled with gaussian distributions and have their oun state transition noise. Observations are connected to states with Gaussian node as well and have extra noise.
+`DataGenerationProcess` encapsulates a simple data generation process with a rotation matrix as state transition matrix. The states are modelled by a Gaussian distributions and have their own state transition noise. Observations are noisy realizations of the hidden states, where the noise is sampled from a Gaussian distribution.
 """
 
 # ╔═╡ 649214d2-b661-49f5-ac36-50da9e358675
@@ -660,7 +665,7 @@ struct DataGenerationProcess
 end
 
 # ╔═╡ fae6b763-658c-4e89-a0c3-477612e6312f
-# generate_next! method generates update states and observatiobs for current process
+# The `generate_next!()`` function generates updated states and observations for the current process.
 function generate_next!(process::DataGenerationProcess)
 	x_k_min = last(process.states)
 	
@@ -675,8 +680,8 @@ function generate_next!(process::DataGenerationProcess)
 end
 
 # ╔═╡ 5d74139d-f61c-4a63-a7bd-35c20f5c04af
-# utility method for recursion issue with DataGenerationProcess constructor and 
-# generate_next! function
+# A utility method for recursion issue with the `DataGenerationProcess` constructor and 
+# `generate_next!()` function
 function make(::Type{ <: DataGenerationProcess }, angle::Float64, npoints, snoise, onoise)
 	object = DataGenerationProcess(angle, npoints, snoise, onoise)
 	for i in 1:npoints-1
@@ -874,7 +879,7 @@ md"""
 
 # ╔═╡ e4cfe8a2-fdd6-4c2c-acc9-8da715afbc8f
 md"""
-`@guard_subscription` macro unsubscribes every time from the same subscription reference before new subscription happens. Needed because Pluto executes cell automatically in a reactive manner so after some changes.
+The `@guard_subscription` macro unsubscribes every time from the same subscription reference before a new subscription occurs. This is required because Pluto executes cells automatically in a reactive manner.
 """
 
 # ╔═╡ b226adcc-e696-4336-8a6c-314295c59be3
@@ -897,7 +902,7 @@ macro guard_subscription(if_expression)
 end
 
 # ╔═╡ b7ae53d3-526f-44fa-91df-88d0a7b59d9b
-# @guard_subscription macro is used to have a better control over reactive subscription/unsubscription process in Pluto notebooks
+# The @guard_subscription macro is used to have a better control over the reactive subscription/unsubscription process in Pluto notebooks.
 @guard_subscription if is_data_generation_subscribed
 	data_generation_subscription[] = subscribe!(stream, data_generation_callback)	
 end
