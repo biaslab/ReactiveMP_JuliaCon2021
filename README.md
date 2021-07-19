@@ -6,7 +6,7 @@ This repository contains an experiments for ReactiveMP.jl package presented on J
 
 To run this notebook you need [Julia](https://julialang.org) 1.6.x installed on your system.
 
-To start open a Julia REPL in projects directory with the following command:
+To start open a Julia REPL in project directory with the following command:
 
 ```bash
 julia --project
@@ -28,6 +28,6 @@ Experiments in this repository use [Pluto notebooks](https://github.com/fonsp/Pl
 julia> import Pluto; Pluto.run()
 ```
 
-In Pluto.jl UI choose the `notebooks/presentation.jl` notebook. It takes some time to initialise notebook since Pluto.jl executes all cells automatically upon opening.
+In Pluto.jl UI open the `notebooks/presentation.jl` notebook. It takes some time to initialise notebook since Pluto.jl executes all cells automatically upon opening.
 
 **Note**: Interactive plotting has been tested properly in Chrome web-browser only. We cannot guarantee proper interactive visualisation in other web browsers.
