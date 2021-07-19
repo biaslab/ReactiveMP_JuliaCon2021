@@ -13,21 +13,11 @@ macro bind(def, element)
     end
 end
 
-# ╔═╡ bdf461c7-918d-4f78-968d-aa3dfd11d3b0
-begin 
-	using Pkg
-	Pkg.activate(".")
-	import DataStructures: CircularBuffer
-	
-	using MacroTools, PlutoUI, Distributions
-	using ColorSchemes
-	using Rocket, GraphPPL, ReactiveMP
-	using Random
-	using Colors
-	using Images
-	
-	import Plots
-end
+# ╔═╡ ab2e4f47-a0cf-4c6b-9a7a-5f10b91a3079
+import Pkg
+
+# ╔═╡ 45d6751c-87e9-407a-b7d8-33a30b716c12
+Pkg.activate("..")
 
 # ╔═╡ 773890b4-f844-4a2b-946b-b56f7f6ac375
 begin
@@ -39,6 +29,20 @@ end
 begin
 	using WGLMakie
 	WGLMakie.set_theme!(resolution = (1350, 800))
+end
+
+# ╔═╡ bdf461c7-918d-4f78-968d-aa3dfd11d3b0
+begin 
+	import DataStructures: CircularBuffer
+	
+	using MacroTools, PlutoUI, Distributions
+	using ColorSchemes
+	using Rocket, GraphPPL, ReactiveMP
+	using Random
+	using Colors
+	using Images
+	
+	import Plots
 end
 
 # ╔═╡ fa08d3fc-ce86-49dd-9002-f8f698808295
@@ -93,7 +97,7 @@ In this model, $\mathbf{x}_k$ denotes the current state of the system (the true 
 
 The state space model can be visually represented by the following factor graph, where the shown graph represents a section is the full model that is repeated for each time step:
 
-$(load("./figs/ffg_png.png"))
+$(load("./../figs/ffg_png.png"))
 
 Usually this type of model is used for linear differential equations where the measured quantities are linear functions of the state variables. For example, this can be the dynamics of a car or a noisy pendulum model [Bayesian Filtering and Smoothing, Särkkä, Simo, p.~44].
 """
@@ -337,18 +341,6 @@ Note: the first selection may lag a little bit due to plotting compilation, also
 begin
 	local f = WGLMakie.Figure()
 	
-	on(events(f).mousebutton) do event
-		return true
-	end
-	
-	on(events(f).mouseposition) do event
-		return true
-	end
-	
-	on(events(f).scroll) do event
-		return true
-	end
-	
 	local colors_data = collect(cgrad(:Blues_9, npoints))
 	local colors_inferred = collect(cgrad(:Reds_9, npoints))
 	local sizes  = abs2.(range(1, 3, length=npoints))	
@@ -413,6 +405,18 @@ begin
 	axis1211 = WGLMakie.Axis(f[1, 2][2, 1])
 	axis1211.ylabel = "y-position" 
 	axis1211.xlabel = "Time step" 
+	
+	on(events(f).mousebutton) do event
+		return true
+	end
+	
+	on(events(f).mouseposition) do event
+		return true
+	end
+	
+	on(events(f).scroll) do event
+		return true
+	end
 	
 	inferred_fig = current_figure()
 end
@@ -916,6 +920,8 @@ end
 
 
 # ╔═╡ Cell order:
+# ╠═ab2e4f47-a0cf-4c6b-9a7a-5f10b91a3079
+# ╠═45d6751c-87e9-407a-b7d8-33a30b716c12
 # ╠═773890b4-f844-4a2b-946b-b56f7f6ac375
 # ╠═3f028a44-cdd0-11eb-2fb0-6b696babeb9b
 # ╠═bdf461c7-918d-4f78-968d-aa3dfd11d3b0
