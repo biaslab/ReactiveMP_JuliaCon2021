@@ -1,6 +1,6 @@
 # ReactiveMP notebooks for JuliaCon 2021
 
-This repository contains an experiments for ReactiveMP.jl package presented on JuliaCon 2021.
+This repository contains an experiments for [ReactiveMP.jl](https://github.com/biaslab/ReactiveMP.jl) package [presented](https://pretalx.com/juliacon2021/talk/J7Z9PL/) on [JuliaCon 2021](https://juliacon.org/2021/).
 
 ## Prerequisites
 
