@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.14.8
+# v0.19.27
 
 using Markdown
 using InteractiveUtils
@@ -7,8 +7,9 @@ using InteractiveUtils
 # This Pluto notebook uses @bind for interactivity. When running this notebook outside of Pluto, the following 'mock version' of @bind gives bound variables a default value (instead of an error).
 macro bind(def, element)
     quote
+        local iv = try Base.loaded_modules[Base.PkgId(Base.UUID("6e696c72-6542-2067-7265-42206c756150"), "AbstractPlutoDingetjes")].Bonds.initial_value catch; b -> missing; end
         local el = $(esc(element))
-        global $(esc(def)) = Core.applicable(Base.get, el) ? Base.get(el) : missing
+        global $(esc(def)) = Core.applicable(Base.get, el) ? Base.get(el) : iv(el)
         el
     end
 end
@@ -28,6 +29,7 @@ end
 # ╔═╡ 3f028a44-cdd0-11eb-2fb0-6b696babeb9b
 begin
 	using WGLMakie
+	import WGLMakie: Point2f0
 	WGLMakie.set_theme!(resolution = (1350, 800))
 end
 
@@ -300,15 +302,15 @@ end;
 
 # ╔═╡ 65125537-9ee9-4b2d-92be-45ee1a914b24
 begin 	
-	real_states  = Node(map(_ -> Point2f0(1000.0, 1000.0), 1:npoints))
-	noisy_states = Node(map(_ -> Point2f0(1000.0, 1000.0), 1:npoints))
+	real_states  = Observable(map(_ -> Point2f0(1000.0, 1000.0), 1:npoints))
+	noisy_states = Observable(map(_ -> Point2f0(1000.0, 1000.0), 1:npoints))
 end;
 
 # ╔═╡ fa7fbcbc-e229-4553-88a8-17c53779725d
 begin 
-	inferred_states  = Node(map(_ -> Point2f0(0, 0), 1:npoints))
-	inferred_band_up = Node(map(_ -> Point2f0(0, 0), 1:npoints))
-	inferred_band_lp = Node(map(_ -> Point2f0(0, 0), 1:npoints))
+	inferred_states  = Observable(map(_ -> Point2f0(0, 0), 1:npoints))
+	inferred_band_up = Observable(map(_ -> Point2f0(0, 0), 1:npoints))
+	inferred_band_lp = Observable(map(_ -> Point2f0(0, 0), 1:npoints))
 end;
 
 # ╔═╡ 736867b0-d0b6-41b9-b4cc-b0de734714fa
@@ -323,6 +325,11 @@ begin
 		@bind is_observations_connected CheckBox(default = false);
 end;
 
+# ╔═╡ 261ca703-871a-4252-a056-157e7c48ae1c
+md"""
+Note: the first selection may lag a little bit due to plotting compilation, also it is better to wait until all cells have been initialised.
+"""
+
 # ╔═╡ 0033f1f2-c84b-47d5-8a58-1f57822c9a25
 md"""
 Select the 'Show data' checkbox to subscribe to a real-time data generation process and to visualise it on the interactive pane below.
@@ -330,11 +337,6 @@ Select the 'Show data' checkbox to subscribe to a real-time data generation proc
 Select the 'Run inference' checkbox to subscribe to the real-time inference procedure. Inference uses the same real-time dataset for inference and state estimation.
 
 Select the 'Connect observations' to connect consecutive observations by a line.
-"""
-
-# ╔═╡ 261ca703-871a-4252-a056-157e7c48ae1c
-md"""
-Note: the first selection may lag a little bit due to plotting compilation, also it is better to wait until all cells have been initialised.
 """
 
 # ╔═╡ 54043ff7-05f2-48ef-89f4-050379eba3f9
@@ -358,6 +360,8 @@ begin
 	axis11 = WGLMakie.Axis(f[1, 1])
 	axis11.ylabel = "y-position" 
 	axis11.xlabel = "x-position" 
+	axis11.xlabelsize = 26
+	axis11.ylabelsize = 26
 	
 	inferred_states_dim1 = map(i -> map(r -> r[1], i), inferred_states)
 	inferred_states_dim2 = map(i -> map(r -> r[2], i), inferred_states)
@@ -389,6 +393,9 @@ begin
 	axis1211 = WGLMakie.Axis(f[1, 2][1, 1])
 	axis1211.ylabel = "x-position" 
 	axis1211.xlabel = "Time step" 
+	axis1211.xlabelsize = 26
+	axis1211.ylabelsize = 26
+	
 	
 	lines(f[1, 2][2, 1], inferred_states_dim2, color = colors_inferred)
 	band!(f[1, 2][2, 1], 
@@ -405,6 +412,8 @@ begin
 	axis1211 = WGLMakie.Axis(f[1, 2][2, 1])
 	axis1211.ylabel = "y-position" 
 	axis1211.xlabel = "Time step" 
+	axis1211.xlabelsize = 26
+	axis1211.ylabelsize = 26
 	
 	on(events(f).mousebutton) do event
 		return true
@@ -420,6 +429,15 @@ begin
 	
 	inferred_fig = current_figure()
 end
+
+# ╔═╡ 6cf1a1b0-3d6c-4e61-90e4-40540622c0ea
+
+
+# ╔═╡ 1bcdc68f-0e19-4534-b79b-923e58702c18
+
+
+# ╔═╡ 872b9127-0632-44f3-9f11-f7a4ef4956a2
+
 
 # ╔═╡ a814a9fe-6c76-4e75-9b0d-7141e18d1f9d
 md"""
@@ -634,7 +652,6 @@ end
 md"
 Show data? $(data_generation_check_box) 
 Run inference? $(inference_check_box)
-Connect observations? $(connect_noise_observations_check_box)
 "
 
 # ╔═╡ e738bbf7-8a66-411c-82f9-9716f749f30b
@@ -962,10 +979,13 @@ end
 # ╠═d92dcc1b-4374-44ec-81b0-3fb74b4a9807
 # ╠═d5c1b0e8-fd51-4312-a06f-0287aad184ba
 # ╟─a83a421f-0ffb-452d-a112-178b4c7b4ebd
+# ╟─261ca703-871a-4252-a056-157e7c48ae1c
 # ╟─0033f1f2-c84b-47d5-8a58-1f57822c9a25
 # ╟─8b2113ff-6ade-40b5-87e9-3a62614e2a72
-# ╟─261ca703-871a-4252-a056-157e7c48ae1c
-# ╟─54043ff7-05f2-48ef-89f4-050379eba3f9
+# ╠═54043ff7-05f2-48ef-89f4-050379eba3f9
+# ╠═6cf1a1b0-3d6c-4e61-90e4-40540622c0ea
+# ╠═1bcdc68f-0e19-4534-b79b-923e58702c18
+# ╠═872b9127-0632-44f3-9f11-f7a4ef4956a2
 # ╟─a814a9fe-6c76-4e75-9b0d-7141e18d1f9d
 # ╟─ea8f35f0-08da-4dee-bab5-69dd81e8ab3b
 # ╟─224f8617-12e9-4c08-ae9e-c4dd283b018a
